@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "pg-residence-app",
+    "slug": "pg-residence-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.pgresidenceapp"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow PG Residence App to access your photos to update your profile picture and upload documents.",
+          "cameraPermission": "Allow PG Residence App to access your camera to take a profile photo or scan a document."
+        }
+      ],
+      "expo-sharing",
+      "expo-font",
+      "@react-native-community/datetimepicker"
+    ]
+  }
+}
