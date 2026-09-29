@@ -59,7 +59,7 @@ export default function NearbyPlacesScreen() {
         <View style={[styles.mapPin, { top: '70%', left: '70%' }]}>
           <Ionicons name="medkit" size={14} color={colors.white} />
         </View>
-        <Text style={styles.mapLabel}>Sunrise PG Residency & surrounding area</Text>
+        <Text style={styles.mapLabel}> PG Residency & surrounding area</Text>
       </View>
 
       {/* Category filter row */}

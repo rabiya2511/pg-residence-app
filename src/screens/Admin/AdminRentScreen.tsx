@@ -77,7 +77,7 @@ export default function AdminRentScreen() {
   const reminderRecipients: WhatsAppRecipient[] = pendingResidents.map((r) => ({
     id: r.id,
     name: r.name,
-    message: `Hi ${r.name}, your rent of ₹${r.monthlyRent} is still ${r.rentStatus.toLowerCase()}. Please pay at the earliest to avoid late fees. — Sunrise PG Residency`,
+    message: `Hi ${r.name}, your rent of ₹${r.monthlyRent} is still ${r.rentStatus.toLowerCase()}. Please pay at the earliest to avoid late fees. — Lokansh Aditya PG Residency`,
   }));
 
   return (

@@ -43,7 +43,7 @@ export default function PaymentSuccessScreen() {
     {
       id: residentData.name,
       name: residentData.name,
-      message: `✅ Payment Received!\n\nHi ${residentData.name}, we've received your rent payment of ₹${amount} for ${month} via ${method}.\n\nTransaction ID: ${transactionId}\nPaid on: ${paidOn}\n\nYour invoice has been generated. — Sunrise PG Residency`,
+      message: `✅ Payment Received!\n\nHi ${residentData.name}, we've received your rent payment of ₹${amount} for ${month} via ${method}.\n\nTransaction ID: ${transactionId}\nPaid on: ${paidOn}\n\nYour invoice has been generated. — Lokansh Aditya PG Residency`,
     },
   ];
 

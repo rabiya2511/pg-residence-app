@@ -32,7 +32,7 @@ function handleCall(phone: string) {
 
 function handleWhatsAppReminder(resident: AdminResident, roomNumber: string) {
   const cleaned = resident.phone.replace(/[^\d]/g, '');
-  const message = `Hi ${resident.name}, this is a reminder that your rent of ₹${resident.monthlyRent} (Room ${roomNumber}) is currently ${resident.rentStatus}. Please make the payment at your earliest convenience. — Sunrise PG Residency`;
+  const message = `Hi ${resident.name}, this is a reminder that your rent of ₹${resident.monthlyRent} (Room ${roomNumber}) is currently ${resident.rentStatus}. Please make the payment at your earliest convenience. — Lokansh Aditya PG Residency`;
   const url = `https://wa.me/${cleaned}?text=${encodeURIComponent(message)}`;
   Linking.openURL(url).catch(() => {
     Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.');

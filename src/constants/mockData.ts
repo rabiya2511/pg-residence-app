@@ -425,7 +425,7 @@ export const faqs: FAQItem[] = [
 export const supportContact = {
   wardenName: 'Mr. Suresh Kumar',
   phone: '+91 98765 12345',
-  email: 'support@sunrisepg.example.com',
+  email: 'support@lokanshadityapg.example.com',
 };
 
 export type PrivacySetting = {

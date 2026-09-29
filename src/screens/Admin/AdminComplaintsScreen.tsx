@@ -82,7 +82,7 @@ export default function AdminComplaintsScreen() {
           const statusMessages: Record<AdminComplaint['status'], string> = {
             Open: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been reopened. Our team will look into it.`,
             'In Progress': `Hi ${complaint.residentName}, your complaint (${complaint.category}) is now being worked on. We'll update you once resolved.`,
-            Resolved: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been marked as resolved. Please let us know if the issue persists. — Sunrise PG Residency`,
+            Resolved: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been marked as resolved. Please let us know if the issue persists. — Lokansh Aditya PG Residency`,
           };
 
           setWhatsappRecipients([
