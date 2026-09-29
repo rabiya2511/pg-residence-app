@@ -23,7 +23,6 @@ import {
   AdminGender,
 } from '../constants/mockData';
 import { useMockAuth } from './MockAuthContext';
-
 export type AdminPaymentNotification = {
   id: string;
   residentId: string;
@@ -92,6 +91,13 @@ type AdminContextType = {
   markAllVacateNotificationsRead: () => void;
   updateComplaintStatus: (complaintId: string, status: AdminComplaint['status']) => void;
   markComplaintViewed: (complaintId: string) => void;
+  /**
+   * Creates a new Open complaint directly on the admin-side Complaints
+   * system. Used by MaintenanceContext so a resident's maintenance request
+   * also shows up in the dashboard complaint count, notification bell, and
+   * complaints list, exactly like a regular complaint.
+   */
+  addComplaint: (input: { residentName: string; room: string; category: string; description: string }) => void;
   addResident: (resident: Omit<AdminResident, 'id'>) => AdminResident;
   updateResident: (residentId: string, updates: Partial<AdminResident>) => void;
   deleteResident: (residentId: string) => void;
@@ -125,6 +131,7 @@ type AdminContextType = {
    * move.
    */
   transferResidentRoom: (residentId: string, newPropertyId: string, newRoomId: string) => void;
+  
 };
 
 const AdminContext = createContext<AdminContextType | undefined>(undefined);
@@ -334,6 +341,20 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     setComplaints((prev) =>
       prev.map((c) => (c.id === complaintId ? { ...c, viewed: true } : c))
     );
+  };
+
+  const addComplaint = (input: { residentName: string; room: string; category: string; description: string }) => {
+    const newComplaint: AdminComplaint = {
+      id: `c${Date.now()}`,
+      residentName: input.residentName,
+      room: input.room,
+      category: input.category,
+      description: input.description,
+      date: formatDisplayDate(new Date()),
+      status: 'Open',
+      viewed: false,
+    };
+    setComplaints((prev) => [newComplaint, ...prev]);
   };
 
   const addResident = (resident: Omit<AdminResident, 'id'>): AdminResident => {
@@ -708,6 +729,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         markAllVacateNotificationsRead,
         updateComplaintStatus,
         markComplaintViewed,
+        addComplaint,
         addResident,
         updateResident,
         deleteResident,

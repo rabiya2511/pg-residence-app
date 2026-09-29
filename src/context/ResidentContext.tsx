@@ -13,10 +13,16 @@ type ResidentContextType = {
 const ResidentContext = createContext<ResidentContextType | undefined>(undefined);
 
 export function ResidentProvider({ children }: { children: ReactNode }) {
-  const { residents, updateResident } = useAdmin();
+  const { residents, updateResident, rooms, properties } = useAdmin();
   const { residentId } = useMockAuth();
 
   const adminRecord = residents.find((r) => r.id === residentId);
+  // Room/property are looked up live from AdminContext, the same source
+  // every admin screen reads — so a transfer (transferResidentRoom) or a
+  // plain edit of roomId/propertyId shows up here immediately, with no
+  // separate "resident-side" copy of this data to fall out of sync.
+  const adminRoom = adminRecord ? rooms.find((r) => r.id === adminRecord.roomId) : undefined;
+  const adminProperty = adminRecord ? properties.find((p) => p.id === adminRecord.propertyId) : undefined;
 
   // Every field that also exists on AdminResident is synced from there —
   // so an admin's edit (via AdminResidentFormScreen) and a resident's own
@@ -36,6 +42,19 @@ export function ResidentProvider({ children }: { children: ReactNode }) {
     emergencyContact1: adminRecord?.emergencyContact1 ?? fallbackResidentData.emergencyContact1,
     emergencyContact2: adminRecord?.emergencyContact2 ?? fallbackResidentData.emergencyContact2,
     companyIdProofUri: adminRecord?.companyIdProofUri ?? fallbackResidentData.companyIdProofUri,
+    // FIX: these previously always fell back to the static mock ('A-204',
+    // 'B2', etc.) regardless of the resident's actual assigned room —
+    // now derived live from AdminContext, same as every admin screen.
+    pgName: adminProperty?.name ?? fallbackResidentData.pgName,
+    room: adminRoom?.roomNumber ?? fallbackResidentData.room,
+    // AdminResident/Room have no individual bed-letter concept (only a room
+    // capacity, e.g. "3 Sharing") — showing the sharing type here instead
+    // of a fabricated bed code that doesn't exist anywhere else in the data
+    // model.
+    bed: adminRoom ? `${adminRoom.capacity} Sharing` : fallbackResidentData.bed,
+    joiningDate: adminRecord?.joiningDate ?? fallbackResidentData.joiningDate,
+    monthlyRent: adminRecord?.monthlyRent ?? fallbackResidentData.monthlyRent,
+    stayStatus: adminRecord?.vacatingDate ? 'Notice Given' : 'Active',
   };
 
   const updateResidentData = (updates: Partial<ResidentDataType>) => {

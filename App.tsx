@@ -12,7 +12,7 @@ import { VisitorsProvider } from './src/context/VisitorsContext';
 import { DocumentsProvider } from './src/context/DocumentsContext';
 import { ResidentProvider } from './src/context/ResidentContext';
 import { PaymentMethodsProvider } from './src/context/PaymentMethodsContext';
-
+        
 function NotificationScheduler() {
   const { rentStatus } = useRent();
 
