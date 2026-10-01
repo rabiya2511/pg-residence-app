@@ -99,7 +99,7 @@ export default function ProfileScreen() {
           <SectionHeader title="Personal Information" />
           <InfoCard rows={personalInfoRows} />
         </View>
-
+    
         <View style={styles.section}>
           <SectionHeader title="PG Information" />
           <InfoCard rows={pgInfoRows} />

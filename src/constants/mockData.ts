@@ -647,15 +647,51 @@ export const nearbyPlaces: NearbyPlace[] = [
   { id: 'np8', name: 'QuickMart Supermarket', category: 'Grocery/Mart', distance: '0.8 km', rating: 4.0, icon: 'cart-outline' },
 ];
 
+export type PropertyAddress = {
+  streetNo: string;
+  landmark: string;
+  city: string;
+  pinCode: string;
+};
+
+export const HOUSE_GUIDELINE_PRESETS: Record<'Co-Living' | 'Executive' | 'Student', string> = {
+  'Co-Living':
+    '1. Gate Timings: Main entrance closes strictly at 10:30 PM. Late entry requires prior warden permission.\n2. Visitor Guidelines: Visitors permitted in common lounge only until 8:00 PM. No entry into private rooms.\n3. Rent Payment: Monthly rent must be settled on or before the due date.',
+  Executive:
+    '1. Gate Timings: Main entrance closes at 11:30 PM for working professionals.\n2. Visitor Guidelines: Visitors permitted in common areas until 9:00 PM.\n3. Rent Payment: Monthly rent must be settled on or before the due date.',
+  Student:
+    '1. Gate Timings: Main entrance closes strictly at 9:30 PM on weekdays, 10:30 PM on weekends.\n2. Visitor Guidelines: Visitors permitted in common lounge only until 7:00 PM. No entry into private rooms.\n3. Rent Payment: Monthly rent must be settled on or before the 5th of each month.',
+};
+
 export type Property = {
   id: string;
   name: string;
-  images: string[]; // local URIs from camera/file picker, shown to residents
+  address: string;
+  addressDetails: PropertyAddress;
+  images: string[];
+  floors?: number;
+  branchManager?: string;
+  contactPhone?: string;
+  standardRent?: number;
+  googleReviewLink?: string;
+  houseGuidelines?: string;
+  logoUri?: string | null;
+  upiId?: string | null;
+  whatsappGroupLink?: string | null;
 };
 
+const EMPTY_ADDRESS: PropertyAddress = { streetNo: '', landmark: '', city: '', pinCode: '' };
+
+export function formatPropertyAddress(details: PropertyAddress): string {
+  const parts = [details.streetNo, details.landmark, details.city, details.pinCode].filter(
+    (p) => p.trim().length > 0
+  );
+  return parts.join(', ');
+}
+
 export const properties: Property[] = [
-  { id: 'prop1', name: 'Lokansh Aditya Co-living PG', images: [] },
-  { id: 'prop2', name: 'Lokansh Aditya Ladies PG', images: [] },
+  { id: 'prop1', name: 'Lokansh Aditya Co-living PG', address: '', addressDetails: { ...EMPTY_ADDRESS }, images: [] },
+  { id: 'prop2', name: 'Lokansh Aditya Ladies PG', address: '', addressDetails: { ...EMPTY_ADDRESS }, images: [] },
 ];
 
 export type Room = {
@@ -748,3 +784,31 @@ export type AdminDailyGuest = {
 };
 
 export const adminDailyGuests: AdminDailyGuest[] = [];
+
+export type ReportCategory = 'Resident' | 'Room' | 'Financial' | 'Maintenance';
+
+export type ReportDefinition = {
+  id: string;
+  title: string;
+  description: string;
+  category: ReportCategory;
+};
+
+export const REPORT_DEFINITIONS: ReportDefinition[] = [
+  { id: 'resident-master', title: 'Resident Master Report', description: 'Complete directory of all registered residents with room and contact details', category: 'Resident' },
+  { id: 'active-residents', title: 'Active Residents', description: 'List of currently active paying tenants living on premise', category: 'Resident' },
+  { id: 'new-residents', title: 'New Residents', description: 'Recently joined residents within the selected timeframe', category: 'Resident' },
+  { id: 'checked-out-residents', title: 'Checked-Out Residents', description: 'Residents whose vacating date has already passed', category: 'Resident' },
+  { id: 'notice-period-residents', title: 'Notice Period Residents', description: 'Residents currently serving exit notice with an upcoming checkout date', category: 'Resident' },
+  { id: 'pre-bookings', title: 'Pre-Bookings', description: 'Upcoming day-guest check-ins not yet arrived', category: 'Resident' },
+  { id: 'daily-short-stay', title: 'Daily/Short-Stay Residents', description: 'Day guests with check-in, check-out and per-day tariffs', category: 'Resident' },
+  { id: 'room-occupancy', title: 'Room Occupancy', description: 'Bed-by-bed occupancy status across every room', category: 'Room' },
+  { id: 'vacant-rooms', title: 'Vacant Rooms', description: 'Rooms with at least one bed available right now', category: 'Room' },
+  { id: 'full-rooms', title: 'Full Rooms', description: 'Rooms with zero beds remaining', category: 'Room' },
+  { id: 'rent-collection', title: 'Rent Collection', description: 'Rent payments received, with amount, date and timing', category: 'Financial' },
+  { id: 'pending-dues', title: 'Pending Dues', description: 'Residents with pending or overdue rent for the current month', category: 'Financial' },
+  { id: 'revenue-summary', title: 'Revenue Summary', description: 'Combined resident rent and day-guest revenue collected', category: 'Financial' },
+  { id: 'open-complaints', title: 'Open Complaints', description: 'Complaints and maintenance requests still open or in progress', category: 'Maintenance' },
+  { id: 'resolved-complaints', title: 'Resolved Complaints', description: 'Complaints marked resolved', category: 'Maintenance' },
+  { id: 'all-complaints', title: 'All Complaints', description: 'Every complaint and maintenance request on record', category: 'Maintenance' },
+];

@@ -6,6 +6,7 @@ import AdminDashboardScreen from '../screens/Admin/AdminDashboardScreen';
 import AdminResidentsScreen from '../screens/Admin/AdminResidentsScreen';
 import AdminComplaintsScreen from '../screens/Admin/AdminComplaintsScreen';
 import AdminRentScreen from '../screens/Admin/AdminRentScreen';
+import AdminAnalyticsScreen from '../screens/Admin/AdminAnalyticsScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -34,6 +35,7 @@ export default function AdminTabNavigator() {
           if (route.name === 'Residents') iconName = focused ? 'people' : 'people-outline';
           if (route.name === 'AdminComplaints') iconName = focused ? 'alert-circle' : 'alert-circle-outline';
           if (route.name === 'AdminRent') iconName = focused ? 'cash' : 'cash-outline';
+          if (route.name === 'AdminAnalytics') iconName = focused ? 'analytics' : 'analytics-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
       })}
@@ -51,6 +53,7 @@ export default function AdminTabNavigator() {
         })}
       />
       <Tab.Screen name="AdminRent" component={AdminRentScreen} options={{ title: 'Rent' }} />
+      <Tab.Screen name="AdminAnalytics" component={AdminAnalyticsScreen} options={{ title: 'Analytics' }} />
     </Tab.Navigator>
   );
 }

@@ -137,6 +137,9 @@ export default function AdminResidentFormScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [monthlyRent, setMonthlyRent] = useState(existing ? String(existing.monthlyRent) : '');
   const [rentDueDay, setRentDueDay] = useState(existing ? String(existing.rentDueDay) : '5');
+  // Tracks whether the admin typed their own due day, so picking a joining
+  // date never overwrites a value they entered on purpose.
+  const [dueDayEdited, setDueDayEdited] = useState(false);
   const [securityDeposit, setSecurityDeposit] = useState(existing ? String(existing.securityDeposit) : '');
   const [termsAgreed, setTermsAgreed] = useState(isEdit);
 
@@ -180,6 +183,10 @@ export default function AdminResidentFormScreen() {
     setShowDatePicker(Platform.OS === 'ios');
     if (selectedDate) {
       setJoiningDate(selectedDate);
+      // New residents: due day follows the joining date, unless the admin typed their own
+      if (!isEdit && !dueDayEdited) {
+        setRentDueDay(String(selectedDate.getDate()));
+      }
     }
   };
 
@@ -350,7 +357,10 @@ export default function AdminResidentFormScreen() {
           <Field
             label="Rent Due Day of Month"
             value={rentDueDay}
-            onChangeText={setRentDueDay}
+            onChangeText={(text) => {
+              setRentDueDay(text);
+              setDueDayEdited(true);
+            }}
             placeholder="e.g. 5"
             keyboardType="numeric"
           />

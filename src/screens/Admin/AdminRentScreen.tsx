@@ -113,11 +113,16 @@ export default function AdminRentScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={residents}
+            <FlatList
+        data={pendingResidents}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
+            No pending or overdue rent — everyone's paid up! 🎉
+          </Text>
+        }
         renderItem={({ item }) => (
           <RentRow
             resident={item}

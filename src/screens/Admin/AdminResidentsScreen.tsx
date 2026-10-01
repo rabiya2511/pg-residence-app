@@ -1,5 +1,19 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Linking, Image } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Alert,
+  Linking,
+  Image,
+  Modal,
+  ScrollView,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -7,7 +21,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { AdminResident, Room, Property } from '../../constants/mockData';
-import { useAdmin } from '../../context/AdminContext';
+import { useAdmin, isDailyGuestActiveNow, ArchivedResident } from '../../context/AdminContext';
 
 const statusColors: Record<string, { bg: string; text: string }> = {
   Paid: { bg: '#D1FAE5', text: colors.success },
@@ -35,6 +49,13 @@ function handleWhatsAppReminder(resident: AdminResident, roomNumber: string) {
   const message = `Hi ${resident.name}, this is a reminder that your rent of ₹${resident.monthlyRent} (Room ${roomNumber}) is currently ${resident.rentStatus}. Please make the payment at your earliest convenience. — Lokansh Aditya PG Residency`;
   const url = `https://wa.me/${cleaned}?text=${encodeURIComponent(message)}`;
   Linking.openURL(url).catch(() => {
+    Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.');
+  });
+}
+
+function handleWhatsAppChat(phone: string) {
+  const cleaned = phone.replace(/[^\d]/g, '');
+  Linking.openURL(`https://wa.me/${cleaned}`).catch(() => {
     Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.');
   });
 }
@@ -113,30 +134,189 @@ function ResidentCard({
   );
 }
 
+function ArchivedResidentCard({
+  resident,
+  rooms,
+  properties,
+  onRestore,
+  onDeletePermanently,
+}: {
+  resident: ArchivedResident;
+  rooms: Room[];
+  properties: Property[];
+  onRestore: () => void;
+  onDeletePermanently: () => void;
+}) {
+  const roomNumber = getRoomNumber(rooms, resident.roomId);
+  const propertyName = getPropertyName(properties, resident.propertyId);
+
+  return (
+    <View style={styles.archivedCard}>
+      <View style={styles.archivedTop}>
+        <View style={styles.avatarWrap}>
+          {resident.profileImageUri ? (
+            <Image source={{ uri: resident.profileImageUri }} style={styles.avatarImage} />
+          ) : (
+            <Ionicons name="person" size={22} color={colors.textMuted} />
+          )}
+        </View>
+        <View style={styles.content}>
+          <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
+          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]} numberOfLines={1}>
+            Last room: {roomNumber} · {propertyName}
+          </Text>
+          <Text style={[typography.caption, { color: colors.textMuted }]}>
+            Archived on {resident.archivedOn}
+          </Text>
+          <View style={styles.phoneRow}>
+            <Text style={[typography.caption, { color: colors.textMuted }]}>{resident.phone}</Text>
+            <View style={styles.phoneActions}>
+              <TouchableOpacity style={styles.phoneActionButton} onPress={() => handleCall(resident.phone)}>
+                <Ionicons name="call-outline" size={16} color={colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.phoneActionButton} onPress={() => handleWhatsAppChat(resident.phone)}>
+                <Ionicons name="logo-whatsapp" size={16} color={colors.success} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.archivedActions}>
+        <TouchableOpacity style={[styles.archivedButton, styles.restoreButton]} activeOpacity={0.85} onPress={onRestore}>
+          <Ionicons name="refresh-outline" size={16} color={colors.white} />
+          <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>Restore</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.archivedButton, styles.permDeleteButton]}
+          activeOpacity={0.85}
+          onPress={onDeletePermanently}
+        >
+          <Ionicons name="trash-outline" size={16} color={colors.error} />
+          <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
+            Delete Permanently
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 export default function AdminResidentsScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const filterRentStatus: 'PendingOrOverdue' | undefined = route.params?.filterRentStatus;
-  const { residents, deleteResident, rooms, properties } = useAdmin();
+  const {
+    residents,
+    archivedResidents,
+    archiveResident,
+    restoreResident,
+    permanentlyDeleteResident,
+    rooms,
+    properties,
+    dailyGuests,
+  } = useAdmin();
+
+  const [view, setView] = useState<'active' | 'archived'>('active');
+
+  // Restore dialog state
+  const [restoreTarget, setRestoreTarget] = useState<ArchivedResident | null>(null);
+  const [restoreRoomId, setRestoreRoomId] = useState<string | null>(null);
+  const [restoreRent, setRestoreRent] = useState('');
+
+  const showingArchived = view === 'archived' && !filterRentStatus;
 
   const visibleResidents = filterRentStatus
     ? residents.filter((r) => r.rentStatus === 'Pending' || r.rentStatus === 'Overdue')
     : residents;
 
-  const handleDelete = (resident: AdminResident) => {
+  // Rooms that still have a free bed — used when restoring a resident.
+  const roomsWithFreeBeds = useMemo(
+    () =>
+      rooms
+        .map((room) => {
+          const occupants =
+            residents.filter((r) => r.roomId === room.id).length +
+            dailyGuests.filter((g) => g.roomId === room.id && isDailyGuestActiveNow(g)).length;
+          return { room, free: room.capacity - occupants };
+        })
+        .filter((x) => x.free > 0)
+        .sort(
+          (a, b) =>
+            a.room.propertyId.localeCompare(b.room.propertyId) ||
+            a.room.floor - b.room.floor ||
+            a.room.roomNumber.localeCompare(b.room.roomNumber, undefined, { numeric: true })
+        ),
+    [rooms, residents, dailyGuests]
+  );
+
+  const handleRemove = (resident: AdminResident) => {
     const roomNumber = getRoomNumber(rooms, resident.roomId);
     Alert.alert(
       'Remove Resident',
-      `Remove ${resident.name} from Room ${roomNumber}? This can't be undone.`,
+      `What would you like to do with ${resident.name} (Room ${roomNumber})?\n\nArchive keeps their details so you can restore them if they return later. Delete Permanently erases everything.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Remove',
+          text: 'Archive (can restore)',
+          onPress: () => archiveResident(resident.id),
+        },
+        {
+          text: 'Delete Permanently',
           style: 'destructive',
-          onPress: () => deleteResident(resident.id),
+          onPress: () => confirmPermanentDelete(resident.id, resident.name),
         },
       ]
     );
+  };
+
+  const confirmPermanentDelete = (residentId: string, name: string) => {
+    Alert.alert(
+      'Delete Permanently?',
+      `${name}'s details, documents and payment records will be erased for good. This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Permanently',
+          style: 'destructive',
+          onPress: () => permanentlyDeleteResident(residentId),
+        },
+      ]
+    );
+  };
+
+  const openRestore = (resident: ArchivedResident) => {
+    const oldRoomFree = roomsWithFreeBeds.some((x) => x.room.id === resident.roomId);
+    setRestoreTarget(resident);
+    setRestoreRoomId(oldRoomFree ? resident.roomId : null);
+    setRestoreRent(String(resident.monthlyRent));
+  };
+
+  const handleConfirmRestore = () => {
+    if (!restoreTarget) return;
+    const chosen = roomsWithFreeBeds.find((x) => x.room.id === restoreRoomId);
+    if (!chosen) {
+      Alert.alert('Select a Room', 'Please choose a room with a free bed.');
+      return;
+    }
+    const rentValue = Number(restoreRent);
+    if (isNaN(rentValue) || rentValue <= 0) {
+      Alert.alert('Invalid Rent', 'Please enter a valid monthly rent.');
+      return;
+    }
+    const result = restoreResident(restoreTarget.id, {
+      roomId: chosen.room.id,
+      propertyId: chosen.room.propertyId,
+      monthlyRent: rentValue,
+    });
+    if (!result.ok) {
+      Alert.alert('Could Not Restore', result.message ?? 'Something went wrong.');
+      return;
+    }
+    const name = restoreTarget.name;
+    setRestoreTarget(null);
+    setView('active');
+    Alert.alert('Resident Restored', `${name} is an active resident again.`);
   };
 
   return (
@@ -147,7 +327,7 @@ export default function AdminResidentsScreen() {
             {filterRentStatus ? 'Pending Rent' : 'Residents'}
           </Text>
           <Text style={[typography.body, { color: colors.textMuted }]}>
-            {visibleResidents.length} total
+            {showingArchived ? `${archivedResidents.length} archived` : `${visibleResidents.length} total`}
           </Text>
         </View>
         <TouchableOpacity
@@ -159,22 +339,151 @@ export default function AdminResidentsScreen() {
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={visibleResidents}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        renderItem={({ item }) => (
-          <ResidentCard
-            resident={item}
-            rooms={rooms}
-            properties={properties}
-            onPress={() => navigation.navigate('AdminResidentDetail', { residentId: item.id })}
-            onEdit={() => navigation.navigate('AdminResidentForm', { residentId: item.id })}
-            onDelete={() => handleDelete(item)}
-          />
-        )}
-      />
+      {!filterRentStatus && (
+        <View style={styles.segment}>
+          <TouchableOpacity
+            style={[styles.segmentItem, view === 'active' && styles.segmentItemActive]}
+            onPress={() => setView('active')}
+          >
+            <Text
+              style={[
+                typography.caption,
+                { color: view === 'active' ? colors.white : colors.text, fontWeight: '700' },
+              ]}
+            >
+              Active ({residents.length})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segmentItem, view === 'archived' && styles.segmentItemActive]}
+            onPress={() => setView('archived')}
+          >
+            <Text
+              style={[
+                typography.caption,
+                { color: view === 'archived' ? colors.white : colors.text, fontWeight: '700' },
+              ]}
+            >
+              Archived ({archivedResidents.length})
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {showingArchived ? (
+        <FlatList
+          data={archivedResidents}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
+              No archived residents. Residents you archive will appear here so you can restore them later.
+            </Text>
+          }
+          renderItem={({ item }) => (
+            <ArchivedResidentCard
+              resident={item}
+              rooms={rooms}
+              properties={properties}
+              onRestore={() => openRestore(item)}
+              onDeletePermanently={() => confirmPermanentDelete(item.id, item.name)}
+            />
+          )}
+        />
+      ) : (
+        <FlatList
+          data={visibleResidents}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item }) => (
+            <ResidentCard
+              resident={item}
+              rooms={rooms}
+              properties={properties}
+              onPress={() => navigation.navigate('AdminResidentDetail', { residentId: item.id })}
+              onEdit={() => navigation.navigate('AdminResidentForm', { residentId: item.id })}
+              onDelete={() => handleRemove(item)}
+            />
+          )}
+        />
+      )}
+
+      {/* Restore dialog */}
+      <Modal
+        visible={!!restoreTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRestoreTarget(null)}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.overlay}>
+            <View style={styles.sheet}>
+              <View style={styles.sheetHeader}>
+                <Text style={[typography.heading3, { color: colors.text }]}>Restore Resident</Text>
+                <TouchableOpacity onPress={() => setRestoreTarget(null)}>
+                  <Ionicons name="close" size={22} color={colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+              {restoreTarget && (
+                <Text style={[typography.body, { color: colors.textMuted, marginBottom: spacing.sm }]}>
+                  {restoreTarget.name} will become an active resident again with rent set to Pending and today as the
+                  joining date.
+                </Text>
+              )}
+
+              <Text style={[typography.caption, styles.label]}>Room</Text>
+              <View style={styles.roomList}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {roomsWithFreeBeds.length === 0 && (
+                    <Text style={[typography.caption, { color: colors.textMuted, padding: spacing.md }]}>
+                      No rooms have a free bed right now.
+                    </Text>
+                  )}
+                  {roomsWithFreeBeds.map(({ room, free }) => {
+                    const selected = room.id === restoreRoomId;
+                    const isOldRoom = room.id === restoreTarget?.roomId;
+                    return (
+                      <TouchableOpacity
+                        key={room.id}
+                        style={[styles.roomOption, selected && styles.roomOptionSelected]}
+                        onPress={() => setRestoreRoomId(room.id)}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+                            Room {room.roomNumber}
+                            {isOldRoom ? ' (previous room)' : ''}
+                          </Text>
+                          <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+                            {getPropertyName(properties, room.propertyId)} · Floor {room.floor} · {free} bed
+                            {free !== 1 ? 's' : ''} free
+                          </Text>
+                        </View>
+                        {selected && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              <Text style={[typography.caption, styles.label]}>Monthly Rent (₹)</Text>
+              <TextInput
+                style={styles.input}
+                value={restoreRent}
+                onChangeText={setRestoreRent}
+                keyboardType="numeric"
+                placeholder="e.g. 8500"
+                placeholderTextColor={colors.textMuted}
+              />
+
+              <TouchableOpacity style={styles.confirmButton} activeOpacity={0.85} onPress={handleConfirmRestore}>
+                <Text style={[typography.button, { color: colors.white }]}>Restore Resident</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -198,6 +507,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  segment: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 3,
+  },
+  segmentItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.full,
+  },
+  segmentItemActive: {
+    backgroundColor: colors.primary,
+  },
   listContent: {
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.xl,
@@ -211,6 +539,39 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  archivedCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  archivedTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  archivedActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  archivedButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  restoreButton: {
+    backgroundColor: colors.success,
+  },
+  permDeleteButton: {
+    borderWidth: 1,
+    borderColor: colors.error,
+    backgroundColor: colors.surface,
   },
   avatarWrap: {
     width: 40,
@@ -255,5 +616,63 @@ const styles = StyleSheet.create({
   rowIconButton: {
     padding: spacing.xs,
     marginLeft: spacing.xs,
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    maxHeight: '90%',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  label: {
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  roomList: {
+    maxHeight: 200,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  roomOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  roomOptionSelected: {
+    backgroundColor: colors.primaryLight,
+  },
+  input: {
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 15,
+  },
+  confirmButton: {
+    backgroundColor: colors.success,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.lg,
   },
 });

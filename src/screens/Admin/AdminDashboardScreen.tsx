@@ -7,9 +7,14 @@ import QRCode from 'react-native-qrcode-svg';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { useAdmin } from '../../context/AdminContext';
+import { useAdmin, isDailyGuestActiveNow } from '../../context/AdminContext';
 import { useMockAuth } from '../../context/MockAuthContext';
 import { PG_UPI_ID, PG_PAYEE_NAME } from '../../constants/mockData';
+import { REPORTS } from './AdminReportsScreen';
+
+// Name of the Room & Bed Management screen in your navigator.
+// Change this if your route is registered under a different name.
+const ROOMS_ROUTE = 'AdminRooms';
 
 // No amount baked in — the payer scans this and types the amount themselves
 // in their own UPI app (GPay/PhonePe/Paytm etc. all support this).
@@ -33,6 +38,7 @@ export default function AdminDashboardScreen() {
     paymentNotifications,
     vacateNotifications,
     properties,
+    rooms,
   } = useAdmin();
   const [qrModalVisible, setQrModalVisible] = useState(false);
 
@@ -53,6 +59,16 @@ export default function AdminDashboardScreen() {
   const unreadNotificationCount =
     paymentNotifications.filter((n) => !n.read).length +
     vacateNotifications.filter((n) => !n.read).length;
+
+  // Room allocation numbers: beds taken by residents plus day guests who are
+  // currently staying, measured against total bed capacity of the rooms.
+  const totalBeds = rooms.reduce((sum, r) => sum + r.capacity, 0);
+  const roomIds = new Set(rooms.map((r) => r.id));
+  const occupiedByResidents = adminResidents.filter((r) => roomIds.has(r.roomId)).length;
+  const occupiedByGuests = dailyGuests.filter(
+    (g) => roomIds.has(g.roomId) && isDailyGuestActiveNow(g)
+  ).length;
+  const occupiedBeds = Math.min(totalBeds, occupiedByResidents + occupiedByGuests);
 
   const stats = [
     {
@@ -76,21 +92,21 @@ export default function AdminDashboardScreen() {
       color: colors.error,
       onPress: () => navigation.navigate('AdminComplaints', { filterStatus: 'Open' }),
     },
-        {
+    {
       label: 'Monthly Revenue',
       value: `₹${totalMonthlyRevenue.toLocaleString()}`,
       icon: 'trending-up-outline',
       color: colors.success,
       onPress: () => navigation.navigate('AdminRevenue'),
     },
-        {
+    {
       label: 'Documents',
       value: pendingDocuments,
       icon: 'document-text-outline',
       color: colors.primary,
       onPress: () => navigation.navigate('AdminIdentityDocuments'),
     },
-     {
+    {
       label: 'Properties',
       value: properties.length,
       icon: 'business-outline',
@@ -104,7 +120,7 @@ export default function AdminDashboardScreen() {
       color: colors.success,
       onPress: () => navigation.navigate('AdminDailyGuests'),
     },
-      {
+    {
       label: 'Vacating',
       value: vacatingCount,
       icon: 'exit-outline',
@@ -118,6 +134,32 @@ export default function AdminDashboardScreen() {
       color: colors.success,
       onPress: () => navigation.navigate('AdminDayRevenue'),
     },
+    {
+      label: 'Smart Dialer',
+      value: adminResidents.length,
+      icon: 'call-outline',
+      color: colors.success,
+      onPress: () => navigation.navigate('AdminDialer'),
+    },
+
+    // ── 4th row: room allocation ──
+    {
+      label: 'Room Allocation',
+      value: `${occupiedBeds}/${totalBeds}`,
+      icon: 'bed-outline',
+      color: colors.primary,
+      onPress: () => navigation.navigate(ROOMS_ROUTE),
+    },
+
+    // ── NEW: reports (opens the Reports & Audits list) ──
+        {
+      label: 'Reports',
+      value: REPORTS.length,
+      icon: 'bar-chart-outline',
+      color: colors.primary,
+      onPress: () => navigation.navigate('AdminReports'),
+    },
+     
   ];
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -125,14 +167,16 @@ export default function AdminDashboardScreen() {
         <View style={styles.headerLeft}>
           <Image source={require('../../../assets/pg-logo.png')} style={styles.logo} />
           <View style={{ flexShrink: 1 }}>
-            <Text style={[typography.heading2, { color: colors.text }]}>Admin Dashboard</Text>
-          <Text style={[typography.body, { color: colors.textMuted }]} numberOfLines={1}>
-  {properties.length === 0
-    ? 'No property yet'
-    : properties.length === 1
-    ? properties[0].name
-    : `${properties[0].name} +${properties.length - 1} more`}
-</Text>
+          <Text style={[typography.heading2, { color: colors.text }]} numberOfLines={1} adjustsFontSizeToFit>
+          Admin Dashboard
+        </Text>
+              <Text style={[typography.body, { color: colors.textMuted }]} numberOfLines={1}>
+              {properties.length === 0
+                ? 'No property yet'
+                : properties.length === 1
+                ? properties[0].name
+                : `${properties[0].name} +${properties.length - 1} more`}
+            </Text>
           </View>
         </View>
         <View style={styles.headerIcons}>
@@ -150,6 +194,7 @@ export default function AdminDashboardScreen() {
               </View>
             )}
           </TouchableOpacity>
+
           <TouchableOpacity onPress={logout}>
             <Ionicons name="log-out-outline" size={24} color={colors.error} />
           </TouchableOpacity>
@@ -218,7 +263,7 @@ export default function AdminDashboardScreen() {
           ))}
         </View>
       </ScrollView>
-  
+
       <Modal
         visible={qrModalVisible}
         transparent
@@ -236,7 +281,7 @@ export default function AdminDashboardScreen() {
               <TouchableOpacity onPress={() => setQrModalVisible(false)}>
                 <Ionicons name="close" size={22} color={colors.textMuted} />
               </TouchableOpacity>
-            </View> 
+            </View>
 
             <View style={styles.qrCard}>
               <QRCode value={buildStaticUpiLink()} size={220} />
@@ -287,7 +332,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   headerIconButton: {
-    padding: spacing.xs,
+    padding: 4,
   },
   scrollContent: {
     padding: spacing.md,
