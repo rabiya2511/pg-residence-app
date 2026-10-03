@@ -352,7 +352,17 @@ export default function AdminReportDetailScreen() {
       case 'open-complaints':
       case 'resolved-complaints':
       case 'all-complaints': {
-        const inWindow = dateRange === 'All Records' ? complaints : complaints.filter((c) => inRange(parseDisplayDate(c.date), start, end));
+        // FIX: a resolved complaint is now filtered by WHEN IT WAS RESOLVED
+        // (resolvedDate), not when it was originally raised (date) — so
+        // resolving something today makes it show up under "Today" /
+        // "This Month" immediately. Still-open/in-progress complaints keep
+        // using their raised date, since they have no resolution date yet.
+        const relevantDate = (c: (typeof complaints)[number]) =>
+          c.status === 'Resolved'
+            ? parseDisplayDate(c.resolvedOn) ?? parseDisplayDate(c.date)
+            : parseDisplayDate(c.date);
+
+        const inWindow = dateRange === 'All Records' ? complaints : complaints.filter((c) => inRange(relevantDate(c), start, end));
         const list =
           reportId === 'open-complaints'
             ? inWindow.filter((c) => c.status !== 'Resolved')
@@ -367,15 +377,24 @@ export default function AdminReportDetailScreen() {
           { label: 'Resolved', value: String(list.filter((c) => c.status === 'Resolved').length), color: colors.success }
         );
         list.forEach((c) => {
+          const dateNote =
+            c.status === 'Resolved' ? `Resolved ${c.resolvedOn ?? c.date}` : `Raised ${c.date}`;
           rows.push({
             primary: `${c.residentName} · ${c.room}`,
             secondary: c.category,
-            tertiary: `${c.description} · ${c.date}`,
+            tertiary: `${c.description} · ${dateNote}`,
             badge: { label: c.status, color: c.status === 'Open' ? colors.error : c.status === 'In Progress' ? colors.warning : colors.success },
           });
         });
         columns = ['Resident', 'Room', 'Category', 'Description', 'Date', 'Status'];
-        pdfRows = list.map((c) => [c.residentName, c.room, c.category, c.description, c.date, c.status]);
+        pdfRows = list.map((c) => [
+          c.residentName,
+          c.room,
+          c.category,
+          c.description,
+          c.status === 'Resolved' ? c.resolvedOn ?? c.date : c.date,
+          c.status,
+        ]);
         break;
       }
 

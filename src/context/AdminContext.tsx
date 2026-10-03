@@ -135,6 +135,14 @@ export type RestoreResidentInput = {
   monthlyRent?: number;
 };
 
+// Optional details when recording a rent payment (e.g. at registration, where the
+// resident is not in the list yet and the amount / reference come from the form).
+export type RecordRentPaymentOptions = {
+  amount?: number;
+  transactionId?: string;
+  dueDay?: number;
+};
+
 type AdminContextType = {
   residents: AdminResident[];
   complaints: AdminComplaint[];
@@ -149,7 +157,12 @@ type AdminContextType = {
   rooms: Room[];
   archivedResidents: ArchivedResident[];
   markRentPaid: (residentId: string) => void;
-  recordRentPayment: (residentId: string, method: string, source?: 'resident' | 'admin') => AdminPaymentRecord;
+  recordRentPayment: (
+    residentId: string,
+    method: string,
+    source?: 'resident' | 'admin',
+    options?: RecordRentPaymentOptions
+  ) => AdminPaymentRecord;
   markNotificationRead: (notificationId: string) => void;
   markAllNotificationsRead: () => void;
   markVacateNotificationRead: (notificationId: string) => void;
@@ -167,8 +180,16 @@ type AdminContextType = {
    * regular resident-submitted complaints too, so both flow through one
    * notification path.
    */
-  addComplaint: (input: { residentName: string; room: string; category: string; description: string }) => void;
+    addComplaint: (input: { residentName: string; room: string; category: string; description: string }) => string;
   addResident: (resident: Omit<AdminResident, 'id'>) => AdminResident;
+  /**
+   * Registers a new resident and, when the first month's rent is paid at
+   * check-in, records that payment (with its method and reference) in the same step.
+   */
+  registerResident: (
+    resident: Omit<AdminResident, 'id'>,
+    firstPayment?: { amount: number; method: string; transactionId?: string }
+  ) => AdminResident;
   updateResident: (residentId: string, updates: Partial<AdminResident>) => void;
   deleteResident: (residentId: string) => void;
   /** Soft delete: moves the resident out of the active list and frees their bed, but keeps all their data. */
@@ -337,12 +358,13 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const recordRentPayment = (
     residentId: string,
     method: string,
-    source: 'resident' | 'admin' = 'admin'
+    source: 'resident' | 'admin' = 'admin',
+    options?: RecordRentPaymentOptions
   ): AdminPaymentRecord => {
     const now = new Date();
     const currentMonthLabel = getMonthLabel(now);
     const resident = residents.find((r) => r.id === residentId);
-    const dueDateObj = getDueDateForMonth(now, resident?.rentDueDay ?? 5);
+    const dueDateObj = getDueDateForMonth(now, options?.dueDay ?? resident?.rentDueDay ?? 5);
     const paidOnStr = formatDisplayDate(now);
 
     const timing: PaymentTiming =
@@ -357,18 +379,18 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     );
 
     const record: AdminPaymentRecord = existing
-      ? { ...existing, paidOn: paidOnStr, status: 'Paid', timing, method, transactionId: `TXN${Date.now()}` }
+      ? { ...existing, paidOn: paidOnStr, status: 'Paid', timing, method, transactionId: options?.transactionId || `TXN${Date.now()}` }
       : {
           id: `pr_${residentId}_${Date.now()}`,
           residentId,
           month: currentMonthLabel,
-          amount: resident?.monthlyRent ?? 0,
+          amount: options?.amount ?? resident?.monthlyRent ?? 0,
           dueDate: formatDisplayDate(dueDateObj),
           paidOn: paidOnStr,
           status: 'Paid',
           timing,
           method,
-          transactionId: `TXN${Date.now()}`,
+          transactionId: options?.transactionId || `TXN${Date.now()}`,
         };
 
     setPaymentRecords((prev) => {
@@ -432,9 +454,20 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     setComplaintNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  const updateComplaintStatus = (complaintId: string, status: AdminComplaint['status']) => {
+    const updateComplaintStatus = (complaintId: string, status: AdminComplaint['status']) => {
+    const today = formatDisplayDate(new Date());
     setComplaints((prev) =>
-      prev.map((c) => (c.id === complaintId ? { ...c, status } : c))
+      prev.map((c) =>
+        c.id === complaintId
+          ? {
+              ...c,
+              status,
+              ...(status === 'In Progress' ? { inProgressOn: today } : {}),
+              ...(status === 'Resolved' ? { resolvedOn: today } : {}),
+              ...(status === 'Open' ? { inProgressOn: undefined, resolvedOn: undefined } : {}),
+            }
+          : c
+      )
     );
   };
 
@@ -444,7 +477,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     );
   };
 
-  const addComplaint = (input: { residentName: string; room: string; category: string; description: string }) => {
+  const addComplaint = (input: { residentName: string; room: string; category: string; description: string }): string => {
     const newComplaint: AdminComplaint = {
       id: `c${Date.now()}`,
       residentName: input.residentName,
@@ -468,6 +501,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       createdAt: Date.now(),
     };
     setComplaintNotifications((prev) => [notification, ...prev]);
+    return newComplaint.id;
   };
 
   const addResident = (resident: Omit<AdminResident, 'id'>): AdminResident => {
@@ -477,6 +511,42 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     };
     setResidents((prev) => [newResident, ...prev]);
     setIdentityDocuments((prev) => [...prev, { residentId: newResident.id, frontUri: null, backUri: null }]);
+    return newResident;
+  };
+
+  const registerResident = (
+    resident: Omit<AdminResident, 'id'>,
+    firstPayment?: { amount: number; method: string; transactionId?: string }
+  ): AdminResident => {
+    // Rent counts as paid only when the first-month payment covers the full rent.
+    const rentPaid = !!firstPayment && resident.monthlyRent > 0 && firstPayment.amount >= resident.monthlyRent;
+    const newResident = addResident({ ...resident, rentStatus: rentPaid ? 'Paid' : 'Pending' });
+
+    if (firstPayment && rentPaid) {
+      const now = new Date();
+      const monthLabel = getMonthLabel(now);
+      const dueDateObj = getDueDateForMonth(now, resident.rentDueDay);
+      const timing: PaymentTiming =
+        now.getTime() < dueDateObj.getTime()
+          ? 'Early'
+          : now.toDateString() === dueDateObj.toDateString()
+          ? 'On Time'
+          : 'Late';
+      const record: AdminPaymentRecord = {
+        id: `pr_${newResident.id}_${monthLabel.replace(/\s/g, '_')}`,
+        residentId: newResident.id,
+        month: monthLabel,
+        amount: resident.monthlyRent,
+        dueDate: formatDisplayDate(dueDateObj),
+        paidOn: formatDisplayDate(now),
+        status: 'Paid',
+        timing,
+        method: firstPayment.method,
+        transactionId: firstPayment.transactionId?.trim() || `TXN${Date.now()}`,
+      };
+      setPaymentRecords((prev) => [record, ...prev.filter((p) => p.id !== record.id)]);
+    }
+
     return newResident;
   };
 
@@ -1050,6 +1120,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         markComplaintViewed,
         addComplaint,
         addResident,
+        registerResident,
         updateResident,
         deleteResident,
         archiveResident,

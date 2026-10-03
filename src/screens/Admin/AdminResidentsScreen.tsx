@@ -22,6 +22,7 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { AdminResident, Room, Property } from '../../constants/mockData';
 import { useAdmin, isDailyGuestActiveNow, ArchivedResident } from '../../context/AdminContext';
+import { exportResidentsToExcel } from '../../services/exportResidentsToExcel';
 
 const statusColors: Record<string, { bg: string; text: string }> = {
   Paid: { bg: '#D1FAE5', text: colors.success },
@@ -215,9 +216,11 @@ export default function AdminResidentsScreen() {
     rooms,
     properties,
     dailyGuests,
+    identityDocuments,
   } = useAdmin();
 
   const [view, setView] = useState<'active' | 'archived'>('active');
+  const [exporting, setExporting] = useState(false);
 
   // Restore dialog state
   const [restoreTarget, setRestoreTarget] = useState<ArchivedResident | null>(null);
@@ -249,6 +252,33 @@ export default function AdminResidentsScreen() {
         ),
     [rooms, residents, dailyGuests]
   );
+
+  // Exports exactly the list currently on screen (Active, Archived or Pending Rent)
+  // to an Excel file with every resident's details.
+  const handleExport = async () => {
+    const list: any[] = showingArchived ? archivedResidents : visibleResidents;
+    if (list.length === 0) {
+      Alert.alert('Nothing to Export', 'There are no residents in this list yet.');
+      return;
+    }
+    try {
+      setExporting(true);
+      const result = await exportResidentsToExcel({
+        residents: list,
+        rooms,
+        properties,
+        identityDocuments,
+        label: showingArchived ? 'Archived' : filterRentStatus ? 'PendingRent' : 'Active',
+      });
+      if (result === 'saved') {
+        Alert.alert('Saved', 'The Excel file was saved in the folder you chose.');
+      }
+    } catch (e) {
+      Alert.alert('Export Failed', 'Could not create the Excel file. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleRemove = (resident: AdminResident) => {
     const roomNumber = getRoomNumber(rooms, resident.roomId);
@@ -369,6 +399,19 @@ export default function AdminResidentsScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Export the resident details shown below to an Excel sheet */}
+      <TouchableOpacity
+        style={[styles.exportButton, exporting && { opacity: 0.6 }]}
+        activeOpacity={0.85}
+        onPress={handleExport}
+        disabled={exporting}
+      >
+        <Ionicons name="download-outline" size={18} color={colors.white} />
+        <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>
+          {exporting ? 'Preparing...' : 'Export to Excel'}
+        </Text>
+      </TouchableOpacity>
 
       {showingArchived ? (
         <FlatList
@@ -525,6 +568,16 @@ const styles = StyleSheet.create({
   },
   segmentItemActive: {
     backgroundColor: colors.primary,
+  },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.success,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
   },
   listContent: {
     paddingHorizontal: spacing.md,

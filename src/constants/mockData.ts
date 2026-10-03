@@ -495,6 +495,15 @@ export type AdminResident = {
   occupationAddress?: string;
   nativePlace?: string;
   companyIdProofUri?: string | null;
+    guardianName?: string;
+  guardianPhone?: string;
+  maintenanceFee?: number;
+  advanceDepositStatus?: 'Paid' | 'Not Paid' | 'No Advance';
+  isPreBooking?: boolean;
+  firstMonthPayment?: { amount: number; method: string; reference?: string };
+  vehicleType?: 'Bicycle' | 'Two-Wheeler' | 'Four-Wheeler';
+  vehicleNumber?: string;
+  vehicleModel?: string;
 };
 
 export const adminResidents: AdminResident[] = [
@@ -514,6 +523,8 @@ export type AdminComplaint = {
   date: string;
   status: 'Open' | 'In Progress' | 'Resolved';
   viewed: boolean;
+  inProgressOn?: string;
+  resolvedOn?: string;
 };
 
 export const adminComplaints: AdminComplaint[] = [
