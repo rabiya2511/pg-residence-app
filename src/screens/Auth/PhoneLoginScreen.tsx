@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,20 +17,25 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
-import GoogleAccountPickerModal from '../../components/auth/GoogleAccountPickerModal';
+
 export default function PhoneLoginScreen() {
   const navigation = useNavigation<any>();
-  const { requestOtp, loginWithGoogle } = useMockAuth();
+  const { requestOtp, loginWithGoogle, authError } = useMockAuth();
   const [phone, setPhone] = useState('');
-  const [googleModalVisible, setGoogleModalVisible] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const handleSendOtp = () => {
-    if (phone.trim().length < 10) {
+  const [sending, setSending] = useState(false);
+
+  const handleSendOtp = async () => {
+    if (phone.trim().replace(/[^\d]/g, '').length < 10) {
       Alert.alert('Invalid Number', 'Please enter a valid phone number.');
       return;
     }
-    requestOtp(phone);
-    navigation.navigate('OtpVerification', { phone: phone.trim() });
+    setSending(true);
+    const sent = await requestOtp(phone);
+    setSending(false);
+    // If sending failed, the reason is shown under the number (authError).
+    if (sent) {
+      navigation.navigate('OtpVerification', { phone: phone.trim() });
+    }
   };
 
   return (
@@ -50,11 +56,24 @@ export default function PhoneLoginScreen() {
               placeholder="+91 98765 43210"
               placeholderTextColor={colors.textMuted}
               keyboardType="phone-pad"
+              editable={!sending}
             />
+            {!!authError && (
+              <Text style={[typography.caption, { color: colors.error, marginTop: spacing.xs }]}>{authError}</Text>
+            )}
           </View>
 
-          <TouchableOpacity style={styles.otpButton} activeOpacity={0.85} onPress={handleSendOtp}>
-            <Text style={[typography.button, { color: colors.white }]}>Get OTP</Text>
+          <TouchableOpacity
+            style={[styles.otpButton, sending && { opacity: 0.7 }]}
+            activeOpacity={0.85}
+            onPress={handleSendOtp}
+            disabled={sending}
+          >
+            {sending ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={[typography.button, { color: colors.white }]}>Get OTP</Text>
+            )}
           </TouchableOpacity>
 
           <View style={styles.dividerRow}>
@@ -65,26 +84,13 @@ export default function PhoneLoginScreen() {
             <View style={styles.dividerLine} />
           </View>
 
-          <TouchableOpacity style={styles.googleButton} activeOpacity={0.85} onPress={() => setGoogleModalVisible(true)}>
+          {/* Real Google sign-in is added in a later step; for now this just explains that. */}
+          <TouchableOpacity style={styles.googleButton} activeOpacity={0.85} onPress={loginWithGoogle}>
             <Ionicons name="logo-google" size={20} color={colors.text} />
             <Text style={[typography.button, { color: colors.text, marginLeft: spacing.sm }]}>
               Continue with Google
             </Text>
           </TouchableOpacity>
-
-            <GoogleAccountPickerModal
-            visible={googleModalVisible}
-            loading={googleLoading}
-            onSelectAccount={() => {
-              setGoogleLoading(true);
-              setTimeout(() => {
-                setGoogleLoading(false);
-                setGoogleModalVisible(false);
-                loginWithGoogle();
-              }, 2000);
-            }}
-            onClose={() => setGoogleModalVisible(false)}
-          />
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

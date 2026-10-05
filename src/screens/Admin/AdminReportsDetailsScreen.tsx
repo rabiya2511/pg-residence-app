@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,14 +16,23 @@ const DATE_RANGE_OPTIONS: DateRangeKey[] = ['Today', 'Yesterday', 'This Week', '
 
 const MONTHS_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// Parses "25 Sep 2026" (dd MMM yyyy)
+// Parses "25 Sep 2026" (dd MMM yyyy) and also "Sep 25, 2026" (MMM d, yyyy),
+// because complaints store their dates in the second format.
 function parseDisplayDate(str: string | null | undefined): Date | null {
   if (!str) return null;
-  const m = str.match(/^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\s+(\d{4})$/);
-  if (!m) return null;
-  const monthIdx = MONTHS_3.findIndex((mo) => mo.toLowerCase() === m[2].toLowerCase());
-  if (monthIdx === -1) return null;
-  return new Date(Number(m[3]), monthIdx, Number(m[1]));
+  const m = str.trim().match(/^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*,?\s+(\d{4})$/);
+  if (m) {
+    const monthIdx = MONTHS_3.findIndex((mo) => mo.toLowerCase() === m[2].toLowerCase());
+    if (monthIdx === -1) return null;
+    return new Date(Number(m[3]), monthIdx, Number(m[1]));
+  }
+  const m2 = str.trim().match(/^([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (m2) {
+    const monthIdx = MONTHS_3.findIndex((mo) => mo.toLowerCase() === m2[1].toLowerCase());
+    if (monthIdx === -1) return null;
+    return new Date(Number(m2[3]), monthIdx, Number(m2[2]));
+  }
+  return null;
 }
 
 // Parses "Aug 3, 2026" (seed payment format) or "03 Aug 2026" (admin format)
@@ -90,10 +99,17 @@ type Row = { primary: string; secondary: string; tertiary?: string; badge?: { la
 export default function AdminReportDetailScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { reportId, title } = route.params as { reportId: string; title?: string };
+  const { reportId, title, range, autoExport } = route.params as {
+    reportId: string;
+    title?: string;
+    range?: string;
+    autoExport?: boolean;
+  };
   const { residents, rooms, properties, dailyGuests, paymentRecords, complaints } = useAdmin();
 
-  const [dateRange, setDateRange] = useState<DateRangeKey>('This Month');
+  const [dateRange, setDateRange] = useState<DateRangeKey>(
+    DATE_RANGE_OPTIONS.includes(range as DateRangeKey) ? (range as DateRangeKey) : 'This Month'
+  );
   const [exporting, setExporting] = useState(false);
 
   const reportTitle = title ?? 'Report';
@@ -352,17 +368,12 @@ export default function AdminReportDetailScreen() {
       case 'open-complaints':
       case 'resolved-complaints':
       case 'all-complaints': {
-        // FIX: a resolved complaint is now filtered by WHEN IT WAS RESOLVED
-        // (resolvedDate), not when it was originally raised (date) — so
-        // resolving something today makes it show up under "Today" /
-        // "This Month" immediately. Still-open/in-progress complaints keep
-        // using their raised date, since they have no resolution date yet.
-        const relevantDate = (c: (typeof complaints)[number]) =>
-          c.status === 'Resolved'
-            ? parseDisplayDate(c.resolvedOn) ?? parseDisplayDate(c.date)
-            : parseDisplayDate(c.date);
-
-        const inWindow = dateRange === 'All Records' ? complaints : complaints.filter((c) => inRange(relevantDate(c), start, end));
+        // "Open" is a current-state report: every complaint that is still open
+        // shows up, whenever it was raised. Resolved / All follow the date window.
+        const inWindow =
+          dateRange === 'All Records' || reportId === 'open-complaints'
+            ? complaints
+            : complaints.filter((c) => inRange(parseDisplayDate(c.date), start, end));
         const list =
           reportId === 'open-complaints'
             ? inWindow.filter((c) => c.status !== 'Resolved')
@@ -377,24 +388,15 @@ export default function AdminReportDetailScreen() {
           { label: 'Resolved', value: String(list.filter((c) => c.status === 'Resolved').length), color: colors.success }
         );
         list.forEach((c) => {
-          const dateNote =
-            c.status === 'Resolved' ? `Resolved ${c.resolvedOn ?? c.date}` : `Raised ${c.date}`;
           rows.push({
             primary: `${c.residentName} · ${c.room}`,
             secondary: c.category,
-            tertiary: `${c.description} · ${dateNote}`,
+            tertiary: `${c.description} · ${c.date}`,
             badge: { label: c.status, color: c.status === 'Open' ? colors.error : c.status === 'In Progress' ? colors.warning : colors.success },
           });
         });
         columns = ['Resident', 'Room', 'Category', 'Description', 'Date', 'Status'];
-        pdfRows = list.map((c) => [
-          c.residentName,
-          c.room,
-          c.category,
-          c.description,
-          c.status === 'Resolved' ? c.resolvedOn ?? c.date : c.date,
-          c.status,
-        ]);
+        pdfRows = list.map((c) => [c.residentName, c.room, c.category, c.description, c.date, c.status]);
         break;
       }
 
@@ -457,6 +459,16 @@ export default function AdminReportDetailScreen() {
       setExporting(false);
     }
   };
+
+  // "Send now" from Scheduled Reports opens this screen and generates the PDF once.
+  useEffect(() => {
+    if (!autoExport) return;
+    const t = setTimeout(() => {
+      handleDownloadPdf();
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -551,4 +563,4 @@ const styles = StyleSheet.create({
   footer: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.background },
   downloadButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.md },
   downloadButtonDisabled: { opacity: 0.6 },
-});
+});;

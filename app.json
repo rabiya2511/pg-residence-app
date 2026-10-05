@@ -17,12 +17,16 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.pgresidenceapp"
+      "package": "com.anonymous.pgresidenceapp",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-       "plugins": [
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+    
       [
         "expo-image-picker",
         {

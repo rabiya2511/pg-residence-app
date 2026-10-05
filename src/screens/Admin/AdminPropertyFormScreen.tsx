@@ -195,7 +195,7 @@ export default function AdminPropertyFormScreen() {
     const floorsNum = Number(floors) || 0;
     const roomsNum = Number(autoGenRooms) || 0;
     const rentNum = Number(standardRent) || undefined;
-
+    
     const addressDetails: PropertyAddress = {
       streetNo: fullAddress.trim(),
       landmark: '',

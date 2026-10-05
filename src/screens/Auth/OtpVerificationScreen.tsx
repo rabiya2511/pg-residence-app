@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,13 +22,29 @@ export default function OtpVerificationScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const phone: string = route.params?.phone ?? '';
-  const { verifyOtp } = useMockAuth();
+  const { verifyOtp, requestOtp, authError } = useMockAuth();
   const [otp, setOtp] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
 
-  const handleVerify = () => {
-    const success = verifyOtp(otp);
-    if (!success) {
-      Alert.alert('Incorrect OTP', 'Please enter the correct code shown above.');
+  const handleVerify = async () => {
+    if (otp.trim().length < 6) {
+      Alert.alert('Incomplete Code', 'Please enter the 6-digit code from the SMS.');
+      return;
+    }
+    setVerifying(true);
+    const success = await verifyOtp(otp);
+    // On success the app switches screens by itself, so only reset the button on failure.
+    if (!success) setVerifying(false);
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    const sent = await requestOtp(phone);
+    setResending(false);
+    if (sent) {
+      setOtp('');
+      Alert.alert('Code Sent', 'A new code has been sent to your number.');
     }
   };
 
@@ -43,14 +60,8 @@ export default function OtpVerificationScreen() {
             Verify OTP
           </Text>
           <Text style={[typography.body, { color: colors.textMuted, marginTop: 4 }]}>
-            Enter the code sent to {phone}
+            Enter the 6-digit code sent to {phone}
           </Text>
-
-          <View style={styles.demoBanner}>
-            <Text style={[typography.caption, { color: colors.primary }]}>
-              Demo mode — use 1234
-            </Text>
-          </View>
 
           <View style={styles.field}>
             <Text style={[typography.caption, styles.label]}>OTP</Text>
@@ -58,15 +69,34 @@ export default function OtpVerificationScreen() {
               style={styles.input}
               value={otp}
               onChangeText={setOtp}
-              placeholder="Enter 4-digit code"
+              placeholder="Enter 6-digit code"
               placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
-              maxLength={4}
+              maxLength={6}
+              editable={!verifying}
             />
+            {!!authError && (
+              <Text style={[typography.caption, { color: colors.error, marginTop: spacing.xs }]}>{authError}</Text>
+            )}
           </View>
 
-          <TouchableOpacity style={styles.verifyButton} activeOpacity={0.85} onPress={handleVerify}>
-            <Text style={[typography.button, { color: colors.white }]}>Verify & Continue</Text>
+          <TouchableOpacity
+            style={[styles.verifyButton, verifying && { opacity: 0.7 }]}
+            activeOpacity={0.85}
+            onPress={handleVerify}
+            disabled={verifying}
+          >
+            {verifying ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={[typography.button, { color: colors.white }]}>Verify & Continue</Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.resendButton} onPress={handleResend} disabled={resending || verifying}>
+            <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>
+              {resending ? 'Sending...' : "Didn't get a code? Resend"}
+            </Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -89,14 +119,6 @@ const styles = StyleSheet.create({
     top: spacing.md,
     left: spacing.lg,
     padding: spacing.xs,
-  },
-  demoBanner: {
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginTop: spacing.lg,
-    alignSelf: 'flex-start',
   },
   field: {
     marginTop: spacing.lg,
@@ -123,5 +145,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     alignItems: 'center',
     marginTop: spacing.xl,
+  },
+  resendButton: {
+    alignItems: 'center',
+    marginTop: spacing.md,
+    padding: spacing.xs,
   },
 });

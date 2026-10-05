@@ -1,156 +1,230 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import { Alert } from 'react-native';
+import { getAuth, onAuthStateChanged, signInWithPhoneNumber, signOut } from '@react-native-firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, updateDoc } from '@react-native-firebase/firestore';
+
+// NOTE: the file and hook names (MockAuthProvider / useMockAuth) are kept on purpose so
+// every screen that already imports them keeps working. Inside, login is now real Firebase
+// phone authentication and the user's profile is stored in Firestore (users/{uid}).
 
 type Role = 'resident' | 'admin' | null;
 
-type AdminAccount = {
-  phone: string;
+type UserProfile = {
+  phone: string; // digits only
   name: string;
-  propertyIds: string[];
+  role: 'resident' | 'admin';
+  residentId: string | null;
+  propertyIds: string[]; // only used for admins
 };
 
-// This is the one admin account whose properties are shown to residents in
-// the public "Book a Room" flow. Any other admin account (the fixed
-// prop_new test number, or any dynamically-registered new PG owner) is a
-// separate, isolated PG whose properties are never shown there — only
-// visible on that admin's own dashboard.
+// ───────── Interim role rules (same behaviour as the old mock login) ─────────
+// Until residents and admins live in Firestore, these decide who a phone number is
+// the FIRST time it logs in. The result is saved in users/{uid} so later logins
+// reuse it. Phase 2 replaces this with a lookup in the residents collection.
 const PRIMARY_ADMIN_PHONE = '98765 43210';
+const FIXED_RESIDENT_PHONE = '99999 99999';
+const DEMO_RESIDENT_ID = 'r1';
 
-// This owner already runs 2 properties (Co-living + Ladies PG), so both are
-// listed under one login.
-// 'prop_new' is a fixed test number for a brand-new PG admin — AdminContext
-// should have no seeded data for this propertyId, so every admin screen
-// renders with empty lists (no rooms/residents/payments), just the UI shells.
-const INITIAL_ADMIN_ACCOUNTS: AdminAccount[] = [
+const KNOWN_ADMINS: { phone: string; name: string; propertyIds: string[] }[] = [
   { phone: PRIMARY_ADMIN_PHONE, name: 'Lokansh Aditya PG Owner', propertyIds: ['prop1', 'prop2'] },
   { phone: '90000 00000', name: 'New PG Admin', propertyIds: ['prop_new'] },
 ];
-
-// The one fixed number that always logs in as the demo resident (Rabiya).
-// Deliberately different from the admin numbers above to avoid role
-// collisions — matches residentData.phone / adminResidents r1.phone in
-// mockData.ts (update those together if this ever changes).
-const FIXED_RESIDENT_PHONE = '99999 99999';
-
-const MOCK_OTP = '1234';
-
-const DEMO_RESIDENT_ID = 'r1';
 
 function cleanPhone(phone: string): string {
   return phone.replace(/[^\d]/g, '');
 }
 
+// Compare by the last 10 digits so "+91 98765 43210" and "98765 43210" match.
+function last10(phone: string): string {
+  return cleanPhone(phone).slice(-10);
+}
+
+// Firebase needs international format. Indian 10-digit numbers get +91.
+function toE164(raw: string): string {
+  const t = raw.trim();
+  if (t.startsWith('+')) return `+${cleanPhone(t)}`;
+  const d = cleanPhone(t);
+  if (d.length === 10) return `+91${d}`;
+  return `+${d}`;
+}
+
+function snapExists(snap: any): boolean {
+  return typeof snap.exists === 'function' ? snap.exists() : !!snap.exists;
+}
+
+function buildInitialProfile(phoneDigits: string): UserProfile {
+  const p10 = last10(phoneDigits);
+
+  if (p10 === last10(FIXED_RESIDENT_PHONE)) {
+    return { phone: phoneDigits, name: 'Resident', role: 'resident', residentId: DEMO_RESIDENT_ID, propertyIds: [] };
+  }
+
+  const known = KNOWN_ADMINS.find((a) => last10(a.phone) === p10);
+  if (known) {
+    return { phone: phoneDigits, name: known.name, role: 'admin', residentId: null, propertyIds: known.propertyIds };
+  }
+
+  // Any other number is a brand-new PG owner: one fresh, empty property.
+  return {
+    phone: phoneDigits,
+    name: 'New PG Owner',
+    role: 'admin',
+    residentId: null,
+    propertyIds: [`prop_${Date.now()}`],
+  };
+}
+
 type MockAuthContextType = {
   role: Role;
   residentId: string | null;
-  // propertyIds owned by the currently logged-in admin, or null when not an
-  // admin session. AdminContext reads this to scope its data.
   adminPropertyIds: string[] | null;
-  // propertyIds owned by the main/primary admin account specifically —
-  // always available regardless of who (if anyone) is currently logged in,
-  // and updates live as that admin adds properties. AdminContext uses this
-  // to build the public list of bookable properties for residents.
   mainAdminPropertyIds: string[];
   pendingPhone: string | null;
-  requestOtp: (phone: string) => void;
-  verifyOtp: (otp: string) => boolean;
+  /** True until Firebase has reported whether someone is already logged in. */
+  initializing: boolean;
+  /** Last login problem (wrong code, no network...). Cleared on the next attempt. */
+  authError: string | null;
+  /** Sends the SMS code. Resolves true when the code was sent. */
+  requestOtp: (phone: string) => Promise<boolean>;
+  /** Checks the code. Resolves true when login succeeded. */
+  verifyOtp: (otp: string) => Promise<boolean>;
   loginWithGoogle: () => void;
   logout: () => void;
-  /**
-   * Called by AdminContext right after a new property is created via the
-   * in-app "Add Property" flow, so it's immediately visible to the admin
-   * who created it without requiring a re-login.
-   */
   addPropertyToCurrentAdmin: (propertyId: string) => void;
 };
 
 const MockAuthContext = createContext<MockAuthContextType | undefined>(undefined);
 
+type Confirmation = Awaited<ReturnType<typeof signInWithPhoneNumber>>;
+
 export function MockAuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>(null);
   const [residentId, setResidentId] = useState<string | null>(null);
-  const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>(INITIAL_ADMIN_ACCOUNTS);
-  const [currentAdminPhone, setCurrentAdminPhone] = useState<string | null>(null); // stored cleaned (digits only)
+  const [adminPropertyIds, setAdminPropertyIds] = useState<string[] | null>(null);
+  // Properties shown to residents in the public "Book a Room" flow (primary admin's).
+  const [mainAdminPropertyIds, setMainAdminPropertyIds] = useState<string[]>(
+    KNOWN_ADMINS.find((a) => last10(a.phone) === last10(PRIMARY_ADMIN_PHONE))?.propertyIds ?? []
+  );
   const [pendingPhone, setPendingPhone] = useState<string | null>(null);
+  const [initializing, setInitializing] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [currentPhone, setCurrentPhone] = useState<string | null>(null);
 
-  const currentAdmin = adminAccounts.find((a) => cleanPhone(a.phone) === currentAdminPhone);
-  const adminPropertyIds = currentAdmin ? currentAdmin.propertyIds : null;
+  const confirmationRef = useRef<Confirmation | null>(null);
 
-  const mainAdmin = adminAccounts.find((a) => cleanPhone(a.phone) === cleanPhone(PRIMARY_ADMIN_PHONE));
-  const mainAdminPropertyIds = mainAdmin ? mainAdmin.propertyIds : [];
-
-  const requestOtp = (phone: string) => {
-    setPendingPhone(phone.trim());
+  const clearSession = () => {
+    setRole(null);
+    setResidentId(null);
+    setAdminPropertyIds(null);
+    setCurrentPhone(null);
   };
 
-  const verifyOtp = (otp: string): boolean => {
-    if (otp.trim() !== MOCK_OTP) {
+  // Runs on app start and whenever someone logs in or out.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(getAuth(), async (user) => {
+      if (!user) {
+        clearSession();
+        setInitializing(false);
+        return;
+      }
+
+      try {
+        const db = getFirestore();
+        const ref = doc(db, 'users', user.uid);
+        const snap = await getDoc(ref);
+
+        let profile: UserProfile;
+        if (snapExists(snap)) {
+          profile = snap.data() as UserProfile;
+        } else {
+          profile = buildInitialProfile(cleanPhone(user.phoneNumber ?? ''));
+          await setDoc(ref, { ...profile, createdAt: Date.now() });
+        }
+
+        setRole(profile.role);
+        setResidentId(profile.role === 'resident' ? profile.residentId : null);
+        setAdminPropertyIds(profile.role === 'admin' ? profile.propertyIds ?? [] : null);
+        setCurrentPhone(profile.phone);
+        setPendingPhone(null);
+      } catch (e) {
+        setAuthError('Could not load your account. Check your internet connection and try again.');
+        await signOut(getAuth());
+        clearSession();
+      } finally {
+        setInitializing(false);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  const requestOtp = async (phone: string): Promise<boolean> => {
+    setAuthError(null);
+    setPendingPhone(phone.trim());
+    try {
+      confirmationRef.current = await signInWithPhoneNumber(getAuth(), toE164(phone));
+      return true;
+    }  catch (e: any) {
+      console.log('requestOtp failed:', e?.code, e?.message);
+      const code: string = e?.code ?? '';
+      setAuthError(
+        code.includes('invalid-phone-number')
+          ? 'That phone number is not valid.'
+          : code.includes('too-many-requests')
+          ? 'Too many attempts. Please wait a few minutes and try again.'
+          : `Could not send the code (${code || e?.message || 'unknown error'}).`
+      );
       return false;
     }
+  };
 
-    const cleanedPending = cleanPhone(pendingPhone ?? '');
-
-    // 1. The one fixed resident test number always logs in as the demo
-    //    resident, regardless of anything else.
-    if (cleanedPending === cleanPhone(FIXED_RESIDENT_PHONE)) {
-      setRole('resident');
-      setResidentId(DEMO_RESIDENT_ID);
-      setCurrentAdminPhone(null);
-      setPendingPhone(null);
-      return true;
+  const verifyOtp = async (otp: string): Promise<boolean> => {
+    setAuthError(null);
+    if (!confirmationRef.current) {
+      setAuthError('Please request a new code first.');
+      return false;
     }
-
-    // 2. A known admin phone (prop1/prop2 owner, or the fixed prop_new test
-    //    number) logs into their existing account.
-    const matchedAdmin = adminAccounts.find((a) => cleanPhone(a.phone) === cleanedPending);
-    if (matchedAdmin) {
-      setRole('admin');
-      setCurrentAdminPhone(cleanedPending);
-      setResidentId(null);
-      setPendingPhone(null);
+    try {
+      // onAuthStateChanged above then loads the profile and sets the role.
+      await confirmationRef.current.confirm(otp.trim());
+      confirmationRef.current = null;
       return true;
+    } catch (e: any) {
+      const code: string = e?.code ?? '';
+      setAuthError(
+        code.includes('invalid-verification-code')
+          ? 'That code is not correct. Please try again.'
+          : code.includes('code-expired')
+          ? 'That code has expired. Please request a new one.'
+          : 'Could not verify the code. Please try again.'
+      );
+      return false;
     }
-
-    // 3. Any other, unrecognized number is a brand-new PG owner logging in
-    //    for the first time — automatically registered as a new admin with
-    //    one fresh propertyId. AdminContext auto-creates the actual empty
-    //    Property record the first time it sees this new id, so every
-    //    screen just shows empty lists ready for them to fill in.
-    const newPropertyId = `prop_${Date.now()}`;
-    const newAccount: AdminAccount = {
-      phone: cleanedPending,
-      name: 'New PG Owner',
-      propertyIds: [newPropertyId],
-    };
-    setAdminAccounts((prev) => [...prev, newAccount]);
-    setRole('admin');
-    setCurrentAdminPhone(cleanedPending);
-    setResidentId(null);
-    setPendingPhone(null);
-    return true;
   };
 
   const loginWithGoogle = () => {
-    setRole('resident');
-    setResidentId(DEMO_RESIDENT_ID);
-    setCurrentAdminPhone(null);
+    Alert.alert('Google Sign-In', 'Google sign-in will be added in the next step. Please use your phone number for now.');
   };
 
   const logout = () => {
-    setRole(null);
-    setResidentId(null);
-    setCurrentAdminPhone(null);
+    signOut(getAuth()).catch(() => {});
+    confirmationRef.current = null;
+    clearSession();
     setPendingPhone(null);
   };
 
   const addPropertyToCurrentAdmin = (propertyId: string) => {
-    if (!currentAdminPhone) return;
-    setAdminAccounts((prev) =>
-      prev.map((a) =>
-        cleanPhone(a.phone) === currentAdminPhone
-          ? { ...a, propertyIds: [...a.propertyIds, propertyId] }
-          : a
-      )
-    );
+    if (!adminPropertyIds) return;
+    const next = [...adminPropertyIds, propertyId];
+    setAdminPropertyIds(next);
+
+    if (currentPhone && last10(currentPhone) === last10(PRIMARY_ADMIN_PHONE)) {
+      setMainAdminPropertyIds(next);
+    }
+
+    const uid = getAuth().currentUser?.uid;
+    if (uid) {
+      updateDoc(doc(getFirestore(), 'users', uid), { propertyIds: next }).catch(() => {});
+    }
   };
 
   return (
@@ -161,6 +235,8 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
         adminPropertyIds,
         mainAdminPropertyIds,
         pendingPhone,
+        initializing,
+        authError,
         requestOtp,
         verifyOtp,
         loginWithGoogle,

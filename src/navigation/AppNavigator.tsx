@@ -1,4 +1,5 @@
 import React from 'react';
+import { ActivityIndicator, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -28,6 +29,7 @@ import NearbyPlacesScreen from '../screens/NearbyPlaces/NearbyPlacesScreen';
 import BookRoomFormScreen from '../screens/BookRoom/BookRoomFormScreen';
 import VacateNoticeScreen from '../screens/Resident/VacateNoticeScreen';
 import ResidentRegistrationScreen from '../screens/BookRoom/ResidentRegistrationScreen';
+import { colors } from '../constants/colors';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -69,7 +71,17 @@ function ResidentStackNavigator() {
 }
 
 export default function AppNavigator() {
-  const { role } = useMockAuth();
+  const { role, initializing } = useMockAuth();
+
+  // Firebase restores a saved login asynchronously. Wait for it, so a logged-in
+  // user is not flashed the login screen on every app start.
+  if (initializing) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaProvider>
@@ -80,4 +92,4 @@ export default function AppNavigator() {
       </NavigationContainer>
     </SafeAreaProvider>
   );
-} 
+}
