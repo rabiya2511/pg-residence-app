@@ -18,11 +18,22 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
 
+// Demo logins: these are the test phone numbers saved in Firebase Console
+// (Authentication > Sign-in method > Phone > Phone numbers for testing).
+// Tapping one signs in through the normal Firebase phone login, so the real data loads.
+// They are only shown while developing (__DEV__), never in a release build.
+const DEMO_OTP = '123456';
+const DEMO_LOGINS = [
+  { label: 'Demo Admin', phone: '98765 43210', icon: 'business-outline' },
+  { label: 'Demo Resident', phone: '99999 99999', icon: 'person-outline' },
+] as const;
+
 export default function PhoneLoginScreen() {
   const navigation = useNavigation<any>();
-  const { requestOtp, loginWithGoogle, authError } = useMockAuth();
+  const { requestOtp, verifyOtp, loginWithGoogle, authError } = useMockAuth();
   const [phone, setPhone] = useState('');
   const [sending, setSending] = useState(false);
+  const [demoBusy, setDemoBusy] = useState<string | null>(null);
 
   const handleSendOtp = async () => {
     if (phone.trim().replace(/[^\d]/g, '').length < 10) {
@@ -37,6 +48,21 @@ export default function PhoneLoginScreen() {
       navigation.navigate('OtpVerification', { phone: phone.trim() });
     }
   };
+
+  // Sends the code and confirms it straight away with the fixed test code.
+  const handleDemoLogin = async (label: string, demoPhone: string) => {
+    setDemoBusy(label);
+    setPhone(demoPhone);
+    try {
+      const sent = await requestOtp(demoPhone);
+      if (sent) await verifyOtp(DEMO_OTP);
+      // On success the app switches to the right dashboard by itself.
+    } finally {
+      setDemoBusy(null);
+    }
+  };
+
+  const busy = sending || demoBusy !== null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -56,7 +82,7 @@ export default function PhoneLoginScreen() {
               placeholder="+91 98765 43210"
               placeholderTextColor={colors.textMuted}
               keyboardType="phone-pad"
-              editable={!sending}
+              editable={!busy}
             />
             {!!authError && (
               <Text style={[typography.caption, { color: colors.error, marginTop: spacing.xs }]}>{authError}</Text>
@@ -64,10 +90,10 @@ export default function PhoneLoginScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.otpButton, sending && { opacity: 0.7 }]}
+            style={[styles.otpButton, busy && { opacity: 0.7 }]}
             activeOpacity={0.85}
             onPress={handleSendOtp}
-            disabled={sending}
+            disabled={busy}
           >
             {sending ? (
               <ActivityIndicator color={colors.white} />
@@ -85,12 +111,38 @@ export default function PhoneLoginScreen() {
           </View>
 
           {/* Real Google sign-in is added in a later step; for now this just explains that. */}
-          <TouchableOpacity style={styles.googleButton} activeOpacity={0.85} onPress={loginWithGoogle}>
+          <TouchableOpacity style={styles.googleButton} activeOpacity={0.85} onPress={loginWithGoogle} disabled={busy}>
             <Ionicons name="logo-google" size={20} color={colors.text} />
             <Text style={[typography.button, { color: colors.text, marginLeft: spacing.sm }]}>
               Continue with Google
             </Text>
           </TouchableOpacity>
+
+          {__DEV__ && (
+            <View style={styles.demoBox}>
+              <Text style={[typography.caption, styles.demoTitle]}>DEMO LOGINS (testing only)</Text>
+              <View style={styles.demoRow}>
+                {DEMO_LOGINS.map((d) => (
+                  <TouchableOpacity
+                    key={d.label}
+                    style={[styles.demoButton, busy && { opacity: 0.6 }]}
+                    activeOpacity={0.85}
+                    onPress={() => handleDemoLogin(d.label, d.phone)}
+                    disabled={busy}
+                  >
+                    {demoBusy === d.label ? (
+                      <ActivityIndicator color={colors.primary} />
+                    ) : (
+                      <>
+                        <Ionicons name={d.icon} size={18} color={colors.primary} />
+                        <Text style={[typography.caption, styles.demoLabel]}>{d.label}</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -150,5 +202,38 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  demoBox: {
+    marginTop: spacing.xl,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+  },
+  demoTitle: {
+    color: colors.textMuted,
+    letterSpacing: 0.5,
+    marginBottom: spacing.sm,
+  },
+  demoRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  demoButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+  },
+  demoLabel: {
+    color: colors.text,
+    fontWeight: '700',
   },
 });

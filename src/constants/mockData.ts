@@ -525,14 +525,17 @@ export type AdminComplaint = {
   viewed: boolean;
   inProgressOn?: string;
   resolvedOn?: string;
+  residentId: string;
+  propertyId?: string;
+
 };
 
 export const adminComplaints: AdminComplaint[] = [
-  { id: 'ac1', residentName: 'Rabiya', room: 'A-204', category: 'Electrical', description: 'Ceiling fan making a loud noise.', date: 'Aug 30, 2026', status: 'In Progress', viewed: true },
-  { id: 'ac2', residentName: 'Priya Patel', room: 'B-302', category: 'Plumbing', description: 'Bathroom tap leaking continuously.', date: 'Aug 29, 2026', status: 'Open', viewed: false },
-  { id: 'ac3', residentName: 'Rohan Verma', room: 'A-204', category: 'Wi-Fi / Internet', description: 'Wi-Fi very slow in the evenings.', date: 'Aug 27, 2026', status: 'Open', viewed: false },
-  { id: 'ac4', residentName: 'Amit Sharma', room: 'A-105', category: 'Furniture', description: 'Wardrobe door hinge broken.', date: 'Aug 22, 2026', status: 'Resolved', viewed: true },
-  { id: 'ac5', residentName: 'Sneha Reddy', room: 'B-301', category: 'Housekeeping', description: 'Common bathroom not cleaned properly.', date: 'Aug 20, 2026', status: 'Resolved', viewed: true },
+  { id: 'ac1', residentName: 'Rabiya', room: 'A-204', category: 'Electrical', description: 'Ceiling fan making a loud noise.', date: 'Aug 30, 2026', status: 'In Progress', viewed: true, residentId: 'r1' },
+  { id: 'ac2', residentName: 'Priya Patel', room: 'B-302', category: 'Plumbing', description: 'Bathroom tap leaking continuously.', date: 'Aug 29, 2026', status: 'Open', viewed: false, residentId: 'r3' },
+  { id: 'ac3', residentName: 'Rohan Verma', room: 'A-204', category: 'Wi-Fi / Internet', description: 'Wi-Fi very slow in the evenings.', date: 'Aug 27, 2026', status: 'Open', viewed: false, residentId: 'r4' },
+  { id: 'ac4', residentName: 'Amit Sharma', room: 'A-105', category: 'Furniture', description: 'Wardrobe door hinge broken.', date: 'Aug 22, 2026', status: 'Resolved', viewed: true, residentId: 'r2' },
+  { id: 'ac5', residentName: 'Sneha Reddy', room: 'B-301', category: 'Housekeeping', description: 'Common bathroom not cleaned properly.', date: 'Aug 20, 2026', status: 'Resolved', viewed: true, residentId: 'r5' },
 ];
 
 export type MonthlyRevenue = {

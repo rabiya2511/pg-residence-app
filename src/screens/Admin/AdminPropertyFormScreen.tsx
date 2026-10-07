@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
   Modal,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
@@ -36,10 +36,12 @@ async function getImageHash(uri: string): Promise<string | null> {
 }
 
 const GUIDELINE_PRESET_KEYS = ['Co-Living', 'Executive', 'Student'] as const;
+type PresetKey = (typeof GUIDELINE_PRESET_KEYS)[number];
 
 export default function AdminPropertyFormScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
+  const insets = useSafeAreaInsets();
   const {
     properties,
     addProperty,
@@ -53,54 +55,78 @@ export default function AdminPropertyFormScreen() {
   const isEdit = !!propertyId;
   const existing = isEdit ? properties.find((p) => p.id === propertyId) : undefined;
 
-  // ---- Add-mode fields ----
+  // ---- One set of fields, used for both "register" and "edit" ----
   const [name, setName] = useState('');
   const [fullAddress, setFullAddress] = useState('');
   const [city, setCity] = useState('');
-  const [floors, setFloors] = useState('4');
+  const [floors, setFloors] = useState(isEdit ? '' : '4');
   const [branchManager, setBranchManager] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [standardRent, setStandardRent] = useState('');
-  const [autoGenRooms, setAutoGenRooms] = useState('10');
+  const [autoGenRooms, setAutoGenRooms] = useState('10'); // register only
   const [googleReviewLink, setGoogleReviewLink] = useState('');
-  const [selectedGuidelinePreset, setSelectedGuidelinePreset] = useState<
-    (typeof GUIDELINE_PRESET_KEYS)[number] | null
-  >(null);
+  const [selectedGuidelinePreset, setSelectedGuidelinePreset] = useState<PresetKey | null>(null);
   const [houseGuidelines, setHouseGuidelines] = useState('');
-  const [showOptionalConfig, setShowOptionalConfig] = useState(false);
+  const [showOptionalConfig, setShowOptionalConfig] = useState(isEdit);
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [upiId, setUpiId] = useState('');
   const [whatsappGroupLink, setWhatsappGroupLink] = useState('');
-
-  // ---- Edit-mode fields ----
-  const [editedStreetNo, setEditedStreetNo] = useState(existing?.addressDetails?.streetNo ?? '');
-  const [editedCity, setEditedCity] = useState(existing?.addressDetails?.city ?? '');
-  const [editedBranchManager, setEditedBranchManager] = useState(existing?.branchManager ?? '');
-  const [editedContactPhone, setEditedContactPhone] = useState(existing?.contactPhone ?? '');
-  const [editedStandardRent, setEditedStandardRent] = useState(
-    existing?.standardRent ? String(existing.standardRent) : ''
-  );
-  const [editedGoogleReviewLink, setEditedGoogleReviewLink] = useState(existing?.googleReviewLink ?? '');
-  const [editedHouseGuidelines, setEditedHouseGuidelines] = useState(existing?.houseGuidelines ?? '');
-  const [editedUpiId, setEditedUpiId] = useState(existing?.upiId ?? '');
-  const [editedWhatsappGroupLink, setEditedWhatsappGroupLink] = useState(existing?.whatsappGroupLink ?? '');
 
   const [pickerVisible, setPickerVisible] = useState(false);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const isCreatingRef = useRef(false);
   const images = existing?.images ?? [];
 
-  const applyGuidelinePreset = (key: (typeof GUIDELINE_PRESET_KEYS)[number]) => {
+  // Fill the form with the saved values once the property has loaded (only once,
+  // so it never overwrites what the admin is typing).
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (!existing || loadedRef.current) return;
+    loadedRef.current = true;
+    setName(existing.name ?? '');
+    setFullAddress(existing.addressDetails?.streetNo ?? '');
+    setCity(existing.addressDetails?.city ?? '');
+    setFloors(existing.floors ? String(existing.floors) : '');
+    setBranchManager(existing.branchManager ?? '');
+    setContactPhone(existing.contactPhone ?? '');
+    setStandardRent(existing.standardRent ? String(existing.standardRent) : '');
+    setGoogleReviewLink(existing.googleReviewLink ?? '');
+    setHouseGuidelines(existing.houseGuidelines ?? '');
+    setSelectedGuidelinePreset(
+      GUIDELINE_PRESET_KEYS.find((k) => HOUSE_GUIDELINE_PRESETS[k] === existing.houseGuidelines) ?? null
+    );
+    setLogoUri(existing.logoUri ?? null);
+    setUpiId(existing.upiId ?? '');
+    setWhatsappGroupLink(existing.whatsappGroupLink ?? '');
+  }, [existing]);
+
+  const applyGuidelinePreset = (key: PresetKey) => {
     setSelectedGuidelinePreset(key);
     setHouseGuidelines(HOUSE_GUIDELINE_PRESETS[key]);
   };
 
   const pickLogo = async () => {
+  try {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
     if (!result.canceled && result.assets?.length) {
       setLogoUri(result.assets[0].uri);
     }
-  };
+  } catch {
+    // The system photo picker is missing (common on emulators): fall back to the file browser.
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'image/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (!result.canceled && result.assets?.length) {
+        setLogoUri(result.assets[0].uri);
+      }
+    } catch {
+      Alert.alert('Unable to Open Gallery', 'Could not open the photo picker on this device.');
+    }
+  }
+};
 
   const filterOutDuplicates = async (candidateUris: string[]): Promise<string[]> => {
     if (!existing) return candidateUris;
@@ -181,30 +207,36 @@ export default function AdminPropertyFormScreen() {
     ]);
   };
 
-  const handleCreateProperty = () => {
+  const validate = (): boolean => {
     if (!name.trim()) {
       Alert.alert('Missing Name', 'Please enter a property name.');
-      return;
+      return false;
     }
     if (!fullAddress.trim()) {
       Alert.alert('Missing Address', 'Please enter the full address.');
-      return;
+      return false;
     }
+    return true;
+  };
+
+  const buildAddress = (): PropertyAddress => ({
+    streetNo: fullAddress.trim(),
+    landmark: existing?.addressDetails?.landmark ?? '',
+    city: city.trim(),
+    pinCode: existing?.addressDetails?.pinCode ?? '',
+  });
+
+  const handleCreateProperty = () => {
+    if (!validate()) return;
     if (isCreatingRef.current) return;
-      isCreatingRef.current = true;
+    isCreatingRef.current = true;
+
     const floorsNum = Number(floors) || 0;
     const roomsNum = Number(autoGenRooms) || 0;
     const rentNum = Number(standardRent) || undefined;
-    
-    const addressDetails: PropertyAddress = {
-      streetNo: fullAddress.trim(),
-      landmark: '',
-      city: city.trim(),
-      pinCode: '',
-    };
 
     const created = addProperty(name.trim(), {
-      addressDetails,
+      addressDetails: buildAddress(),
       floors: floorsNum || undefined,
       branchManager: branchManager.trim() || undefined,
       contactPhone: contactPhone.trim() || undefined,
@@ -225,23 +257,24 @@ export default function AdminPropertyFormScreen() {
 
   const handleSaveDetails = () => {
     if (!existing) return;
+    if (!validate()) return;
     updatePropertyDetails(existing.id, {
-      addressDetails: {
-        streetNo: editedStreetNo.trim(),
-        landmark: existing.addressDetails?.landmark ?? '',
-        city: editedCity.trim(),
-        pinCode: existing.addressDetails?.pinCode ?? '',
-      },
-      branchManager: editedBranchManager.trim(),
-      contactPhone: editedContactPhone.trim(),
-      standardRent: Number(editedStandardRent) || undefined,
-      googleReviewLink: editedGoogleReviewLink.trim(),
-      houseGuidelines: editedHouseGuidelines.trim(),
-      upiId: editedUpiId.trim() || null,
-      whatsappGroupLink: editedWhatsappGroupLink.trim() || null,
+      name: name.trim(),
+      addressDetails: buildAddress(),
+      floors: Number(floors) || undefined,
+      branchManager: branchManager.trim(),
+      contactPhone: contactPhone.trim(),
+      standardRent: Number(standardRent) || undefined,
+      googleReviewLink: googleReviewLink.trim(),
+      houseGuidelines: houseGuidelines.trim(),
+      logoUri,
+      upiId: upiId.trim() || null,
+      whatsappGroupLink: whatsappGroupLink.trim() || null,
     });
     Alert.alert('Property Updated', 'Changes have been saved.');
   };
+
+  const formReady = !isEdit || !!existing;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -250,59 +283,75 @@ export default function AdminPropertyFormScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={[typography.heading3, { color: colors.text }]}>
-          {isEdit ? 'Property Details' : 'Register New Property Branch'}
+          {isEdit ? 'Edit Property' : 'Register New Property'}
         </Text>
-        <View style={{ width: 22 }} />
+        <View style={{ width: 30 }} />
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {!isEdit && (
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {!formReady ? (
+            <Text style={[typography.body, { color: colors.text, textAlign: 'center', marginTop: spacing.xl }]}>
+              Loading property...
+            </Text>
+          ) : (
             <>
-              <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.md }]}>
-                Add a new hostel or PG branch under your multi-property portfolio.
-              </Text>
+              {!isEdit && (
+                <Text style={[typography.caption, styles.intro]}>
+                  Add a new hostel or PG branch under your multi-property portfolio.
+                </Text>
+              )}
 
-              <Field label="Property Name *" value={name} onChangeText={setName} placeholder="e.g. Lokansh Aditya Ladies PG" />
-              <Field label="Full Address *" value={fullAddress} onChangeText={setFullAddress} placeholder="e.g. 12 MG Road, Near City Mall" />
-
-              <View style={styles.row}>
-                <Field label="City" value={city} onChangeText={setCity} placeholder="Bangalore" containerStyle={styles.rowField} />
-                <Field label="Floors" value={floors} onChangeText={setFloors} placeholder="4" keyboardType="numeric" containerStyle={styles.rowField} />
-              </View>
-
-              <View style={styles.row}>
-                <Field label="Branch Manager" value={branchManager} onChangeText={setBranchManager} placeholder="Name" containerStyle={styles.rowField} />
-                <Field label="Contact Phone" value={contactPhone} onChangeText={setContactPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" containerStyle={styles.rowField} />
-              </View>
-
-              <View style={styles.row}>
-                <Field label="Standard Rent (₹)" value={standardRent} onChangeText={setStandardRent} placeholder="12000" keyboardType="numeric" containerStyle={styles.rowField} />
-                <Field label="Auto Gen Rooms" value={autoGenRooms} onChangeText={setAutoGenRooms} placeholder="10" keyboardType="numeric" containerStyle={styles.rowField} />
-              </View>
-
-              <Field
-                label=""
-                value={googleReviewLink}
-                onChangeText={setGoogleReviewLink}
-                placeholder="Google Review Link"
-                icon="star"
-              />
-
-              <View style={styles.guidelinesCard}>
-                <View style={styles.guidelinesHeaderRow}>
-                  <View style={styles.guidelinesTitleRow}>
-                    <Ionicons name="hammer-outline" size={16} color={colors.warning} />
-                    <Text style={[typography.bodyBold, { color: colors.warning, marginLeft: spacing.xs }]}>
-                      Standard House Guidelines
-                    </Text>
-                  </View>
-                  <TouchableOpacity onPress={() => { setSelectedGuidelinePreset(null); setHouseGuidelines(''); }}>
-                    <Text style={[typography.caption, { color: colors.warning }]}>Reset Default</Text>
-                  </TouchableOpacity>
+              {/* ───── Basic details ───── */}
+              <Section icon="business-outline" title="Basic Details">
+                <Field label="Property Name *" value={name} onChangeText={setName} placeholder="e.g. Lokansh Aditya Ladies PG" />
+                <Field label="Full Address *" value={fullAddress} onChangeText={setFullAddress} placeholder="e.g. 12 MG Road, Near City Mall" />
+                <View style={styles.row}>
+                  <Field label="City" value={city} onChangeText={setCity} placeholder="Bangalore" containerStyle={styles.rowField} />
+                  <Field label="Floors" value={floors} onChangeText={setFloors} placeholder="4" keyboardType="numeric" containerStyle={styles.rowField} />
                 </View>
-                <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.sm }]}>
-                  Choose a preset guideline template or enter custom rules:
+              </Section>
+
+              {/* ───── Contact & pricing ───── */}
+              <Section icon="call-outline" title="Contact & Pricing">
+                <View style={styles.row}>
+                  <Field label="Branch Manager" value={branchManager} onChangeText={setBranchManager} placeholder="Name" containerStyle={styles.rowField} />
+                  <Field label="Contact Phone" value={contactPhone} onChangeText={setContactPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" containerStyle={styles.rowField} />
+                </View>
+                <View style={styles.row}>
+                  <Field label="Standard Rent (₹)" value={standardRent} onChangeText={setStandardRent} placeholder="12000" keyboardType="numeric" containerStyle={styles.rowField} />
+                  {!isEdit && (
+                    <Field label="Auto Gen Rooms" value={autoGenRooms} onChangeText={setAutoGenRooms} placeholder="10" keyboardType="numeric" containerStyle={styles.rowField} />
+                  )}
+                </View>
+                <Field
+                  label="Google Review Link"
+                  value={googleReviewLink}
+                  onChangeText={setGoogleReviewLink}
+                  placeholder="https://g.page/..."
+                  icon="star"
+                />
+              </Section>
+
+              {/* ───── House guidelines ───── */}
+              <Section
+                icon="document-text-outline"
+                title="House Guidelines"
+                right={
+                  <TouchableOpacity
+                    onPress={() => { setSelectedGuidelinePreset(null); setHouseGuidelines(''); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={[typography.caption, { color: colors.primary }]}>Clear</Text>
+                  </TouchableOpacity>
+                }
+              >
+                <Text style={[typography.caption, styles.hint]}>
+                  Pick a preset template, then edit it or write your own rules.
                 </Text>
                 <View style={styles.presetRow}>
                   {GUIDELINE_PRESET_KEYS.map((key) => (
@@ -331,136 +380,108 @@ export default function AdminPropertyFormScreen() {
                   multiline
                   numberOfLines={5}
                 />
-              </View>
+              </Section>
 
-              <TouchableOpacity
-                style={styles.optionalToggle}
-                onPress={() => setShowOptionalConfig(!showOptionalConfig)}
+              {/* ───── Branding & payments (collapsible) ───── */}
+              <Section
+                icon="wallet-outline"
+                title="Logo, UPI & WhatsApp"
+                collapsible
+                open={showOptionalConfig}
+                onToggle={() => setShowOptionalConfig(!showOptionalConfig)}
               >
-                <Ionicons
-                  name={showOptionalConfig ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={colors.warning}
+                <Text style={[typography.caption, styles.label]}>Property Logo</Text>
+                <TouchableOpacity style={styles.logoPicker} activeOpacity={0.8} onPress={pickLogo}>
+                  {logoUri ? (
+                    <Image source={{ uri: logoUri }} style={styles.logoPreview} />
+                  ) : (
+                    <>
+                      <Ionicons name="image-outline" size={24} color={colors.textMuted} />
+                      <Text style={[typography.caption, styles.tileText]}>Upload Logo</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+                <Field label="UPI ID" value={upiId} onChangeText={setUpiId} placeholder="yourname@okhdfcbank" />
+                <Field
+                  label="WhatsApp Group Link"
+                  value={whatsappGroupLink}
+                  onChangeText={setWhatsappGroupLink}
+                  placeholder="https://chat.whatsapp.com/..."
                 />
-                <Text style={[typography.caption, { color: colors.warning, marginLeft: spacing.xs }]}>
-                  Configure Logo, UPI & WhatsApp Group (Optional)
-                </Text>
-              </TouchableOpacity>
+              </Section>
 
-              {showOptionalConfig && (
-                <View style={styles.optionalSection}>
-                  <TouchableOpacity style={styles.logoPicker} activeOpacity={0.8} onPress={pickLogo}>
-                    {logoUri ? (
-                      <Image source={{ uri: logoUri }} style={styles.logoPreview} />
-                    ) : (
-                      <>
-                        <Ionicons name="image-outline" size={22} color={colors.textMuted} />
-                        <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
-                          Upload Property Logo
+              {/* ───── Photos + rooms (edit mode only) ───── */}
+              {isEdit && existing && (
+                <>
+                  <Section icon="images-outline" title={`Property Photos (${images.length})`}>
+                    <View style={styles.imageGrid}>
+                      {images.map((uri) => (
+                        <View key={uri} style={styles.imageSlot}>
+                          <Image source={{ uri }} style={styles.image} />
+                          <TouchableOpacity
+                            style={styles.removeBadge}
+                            activeOpacity={0.8}
+                            onPress={() => handleRemoveImage(uri)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Ionicons name="close" size={14} color={colors.white} />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                      <TouchableOpacity
+                        style={styles.addImageSlot}
+                        activeOpacity={0.8}
+                        onPress={() => setPickerVisible(true)}
+                        disabled={checkingDuplicates}
+                      >
+                        <Ionicons
+                          name={checkingDuplicates ? 'hourglass-outline' : 'camera-outline'}
+                          size={24}
+                          color={colors.textMuted}
+                        />
+                        <Text style={[typography.caption, styles.tileText]}>
+                          {checkingDuplicates ? 'Checking...' : 'Add Photo'}
                         </Text>
-                      </>
-                    )}
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={[typography.caption, styles.hint, { marginTop: spacing.sm }]}>
+                      These photos are visible to residents in their dashboard.
+                    </Text>
+                  </Section>
+
+                  <TouchableOpacity
+                    style={styles.manageRoomsButton}
+                    activeOpacity={0.85}
+                    onPress={() => navigation.navigate('AdminPropertyRooms', { propertyId: existing.id })}
+                  >
+                    <Ionicons name="bed-outline" size={18} color={colors.primary} />
+                    <Text style={[typography.button, { color: colors.primary, marginLeft: spacing.xs }]}>
+                      Manage Floors & Rooms
+                    </Text>
                   </TouchableOpacity>
-                  <Field label="UPI ID" value={upiId} onChangeText={setUpiId} placeholder="yourname@okhdfcbank" />
-                  <Field
-                    label="WhatsApp Group Link"
-                    value={whatsappGroupLink}
-                    onChangeText={setWhatsappGroupLink}
-                    placeholder="https://chat.whatsapp.com/..."
-                  />
-                </View>
+                </>
               )}
-
-              <View style={styles.footerRow}>
-                <TouchableOpacity onPress={() => navigation.goBack()}>
-                  <Text style={[typography.body, { color: colors.textMuted }]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.createButton} activeOpacity={0.85} onPress={handleCreateProperty}>
-                  <Text style={[typography.button, { color: colors.white }]}>Create Property</Text>
-                </TouchableOpacity>
-              </View>
-            </>
-          )}
-
-          {isEdit && existing && (
-            <>
-              <Text style={[typography.heading3, { color: colors.text, marginBottom: spacing.sm }]}>
-                {existing.name}
-              </Text>
-
-              <Field label="Street No. / Address Line" value={editedStreetNo} onChangeText={setEditedStreetNo} placeholder="e.g. 12 MG Road" />
-              <Field label="City" value={editedCity} onChangeText={setEditedCity} placeholder="e.g. Bengaluru" />
-              <Field label="Branch Manager" value={editedBranchManager} onChangeText={setEditedBranchManager} placeholder="Name" />
-              <Field label="Contact Phone" value={editedContactPhone} onChangeText={setEditedContactPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" />
-              <Field label="Standard Rent (₹)" value={editedStandardRent} onChangeText={setEditedStandardRent} placeholder="12000" keyboardType="numeric" />
-              <Field label="Google Review Link" value={editedGoogleReviewLink} onChangeText={setEditedGoogleReviewLink} placeholder="https://g.page/..." />
-              <Field label="UPI ID" value={editedUpiId} onChangeText={setEditedUpiId} placeholder="yourname@okhdfcbank" />
-              <Field label="WhatsApp Group Link" value={editedWhatsappGroupLink} onChangeText={setEditedWhatsappGroupLink} placeholder="https://chat.whatsapp.com/..." />
-
-              <View style={styles.field}>
-                <Text style={[typography.caption, styles.label]}>House Guidelines</Text>
-                <TextInput
-                  style={styles.guidelinesInput}
-                  value={editedHouseGuidelines}
-                  onChangeText={setEditedHouseGuidelines}
-                  placeholder="House rules for this property..."
-                  placeholderTextColor={colors.textMuted}
-                  multiline
-                  numberOfLines={5}
-                />
-              </View>
-
-              <TouchableOpacity style={styles.saveAddressButton} activeOpacity={0.85} onPress={handleSaveDetails}>
-                <Text style={[typography.caption, { color: colors.white }]}>Save Details</Text>
-              </TouchableOpacity>
-
-              <Text style={[typography.caption, styles.label, { marginTop: spacing.lg }]}>
-                Property Photos ({images.length})
-              </Text>
-              <View style={styles.imageGrid}>
-                {images.map((uri) => (
-                  <View key={uri} style={styles.imageSlot}>
-                    <Image source={{ uri }} style={styles.image} />
-                    <TouchableOpacity
-                      style={styles.removeBadge}
-                      activeOpacity={0.8}
-                      onPress={() => handleRemoveImage(uri)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close" size={14} color={colors.white} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-                <TouchableOpacity
-                  style={styles.addImageSlot}
-                  activeOpacity={0.8}
-                  onPress={() => setPickerVisible(true)}
-                  disabled={checkingDuplicates}
-                >
-                  <Ionicons name={checkingDuplicates ? 'hourglass-outline' : 'camera-outline'} size={24} color={colors.textMuted} />
-                  <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
-                    {checkingDuplicates ? 'Checking...' : 'Add Photo'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.sm }]}>
-                These photos are visible to residents in their dashboard.
-              </Text>
-
-              <TouchableOpacity
-                style={styles.manageRoomsButton}
-                activeOpacity={0.85}
-                onPress={() => navigation.navigate('AdminPropertyRooms', { propertyId: existing.id })}
-              >
-                <Ionicons name="bed-outline" size={18} color={colors.primary} />
-                <Text style={[typography.button, { color: colors.primary, marginLeft: spacing.xs }]}>
-                  Manage Floors & Rooms
-                </Text>
-              </TouchableOpacity>
             </>
           )}
         </ScrollView>
+
+        {/* Fixed action bar */}
+        {formReady && (
+          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+            <TouchableOpacity style={styles.secondaryButton} activeOpacity={0.8} onPress={() => navigation.goBack()}>
+              <Text style={[typography.button, { color: colors.text }]}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.primaryButton}
+              activeOpacity={0.85}
+              onPress={isEdit ? handleSaveDetails : handleCreateProperty}
+            >
+              <Text style={[typography.button, { color: colors.white }]}>
+                {isEdit ? 'Save Changes' : 'Create Property'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </KeyboardAvoidingView>
 
       <Modal visible={pickerVisible} transparent animationType="fade" onRequestClose={() => setPickerVisible(false)}>
@@ -486,6 +507,51 @@ export default function AdminPropertyFormScreen() {
         </TouchableOpacity>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+// A white card with an icon + title, used to group related fields.
+function Section({
+  icon,
+  title,
+  children,
+  right,
+  collapsible,
+  open = true,
+  onToggle,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  children: React.ReactNode;
+  right?: React.ReactNode;
+  collapsible?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const header = (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionIcon}>
+        <Ionicons name={icon} size={16} color={colors.primary} />
+      </View>
+      <Text style={[typography.bodyBold, { color: colors.text, flex: 1 }]}>{title}</Text>
+      {right}
+      {collapsible && (
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} />
+      )}
+    </View>
+  );
+
+  return (
+    <View style={styles.sectionCard}>
+      {collapsible ? (
+        <TouchableOpacity activeOpacity={0.7} onPress={onToggle}>
+          {header}
+        </TouchableOpacity>
+      ) : (
+        header
+      )}
+      {(!collapsible || open) && <View style={styles.sectionBody}>{children}</View>}
+    </View>
   );
 }
 
@@ -534,9 +600,43 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   backButton: { padding: spacing.xs },
-  scrollContent: { padding: spacing.md, paddingBottom: spacing.xl },
+  scrollContent: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.xl,
+  },
+  intro: { color: colors.text, marginBottom: spacing.md },
+
+  // Section cards
+  sectionCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sectionIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.full,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  sectionBody: {
+    marginTop: spacing.md,
+  },
+
+  // Fields
   field: { marginBottom: spacing.md },
   label: { color: colors.textMuted, marginBottom: spacing.xs },
+  hint: { color: colors.textMuted, marginBottom: spacing.sm },
   input: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -563,29 +663,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
   },
-  rowField: {
-    flex: 1,
-  },
-  guidelinesCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  guidelinesHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  guidelinesTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  rowField: { flex: 1 },
+
+  // Guidelines
   presetRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     marginBottom: spacing.sm,
   },
@@ -595,78 +678,44 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
   },
   presetChipActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
   guidelinesInput: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.md,
     color: colors.text,
-    fontSize: 13,
-    minHeight: 100,
+    fontSize: 14,
+    minHeight: 110,
     textAlignVertical: 'top',
   },
-  optionalToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  optionalSection: {
-    marginBottom: spacing.md,
-  },
+
+  // Upload tiles
   logoPicker: {
     width: 96,
     height: 96,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+    borderStyle: 'dashed',
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.md,
+    overflow: 'hidden',
   },
-  logoPreview: {
-    width: '100%',
-    height: '100%',
-    borderRadius: radius.md,
-  },
-  footerRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: spacing.lg,
-    marginTop: spacing.md,
-  },
-  createButton: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
-  saveAddressButton: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
-    marginTop: spacing.xs,
-    alignSelf: 'flex-start',
-    paddingHorizontal: spacing.md,
-  },
-  manageRoomsButton: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.md,
+  logoPreview: { width: '100%', height: '100%' },
+  tileText: {
+    color: colors.textMuted,
+    marginTop: 4,
+    textAlign: 'center',
+    paddingHorizontal: spacing.xs,
   },
   imageGrid: {
     flexDirection: 'row',
@@ -680,10 +729,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  image: {
-    width: '100%',
-    height: '100%',
-  },
+  image: { width: '100%', height: '100%' },
   removeBadge: {
     position: 'absolute',
     top: 4,
@@ -701,10 +747,52 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+    borderStyle: 'dashed',
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  manageRoomsButton: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Fixed action bar
+  footer: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  secondaryButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  primaryButton: {
+    flex: 2,
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Photo picker sheet
   optionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   optionSheet: {
     backgroundColor: colors.surface,
@@ -721,4 +809,4 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   optionCancel: { alignItems: 'center', paddingTop: spacing.md },
-});  
+});

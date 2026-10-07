@@ -9,6 +9,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin, isDailyGuestActiveNow } from '../../context/AdminContext';
+import { logReportHistory } from '../../services/reportsService';
 
 type DateRangeKey = 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Last Month' | 'This Year' | 'All Records';
 
@@ -106,6 +107,7 @@ export default function AdminReportDetailScreen() {
     autoExport?: boolean;
   };
   const { residents, rooms, properties, dailyGuests, paymentRecords, complaints } = useAdmin();
+  const propertyId = properties[0]?.id;
 
   const [dateRange, setDateRange] = useState<DateRangeKey>(
     DATE_RANGE_OPTIONS.includes(range as DateRangeKey) ? (range as DateRangeKey) : 'This Month'
@@ -366,37 +368,108 @@ export default function AdminReportDetailScreen() {
       }
 
       case 'open-complaints':
+      case 'in-progress-complaints':
       case 'resolved-complaints':
       case 'all-complaints': {
-        // "Open" is a current-state report: every complaint that is still open
-        // shows up, whenever it was raised. Resolved / All follow the date window.
-        const inWindow =
-          dateRange === 'All Records' || reportId === 'open-complaints'
-            ? complaints
-            : complaints.filter((c) => inRange(parseDisplayDate(c.date), start, end));
-        const list =
-          reportId === 'open-complaints'
-            ? inWindow.filter((c) => c.status !== 'Resolved')
-            : reportId === 'resolved-complaints'
-            ? inWindow.filter((c) => c.status === 'Resolved')
-            : inWindow;
+        // Each complaint keeps three dates: raised (date), moved to In Progress
+        // (inProgressOn) and resolved (resolvedOn).
+        const raisedOf = (c: any) => parseDisplayDate(c.date);
+        const progressOf = (c: any) => parseDisplayDate(c.inProgressOn);
+        const resolvedOf = (c: any) => parseDisplayDate(c.resolvedOn);
+        const raisedIn = (c: any) => inRange(raisedOf(c), start, end);
+        const progressIn = (c: any) => inRange(progressOf(c), start, end);
+        const resolvedIn = (c: any) => inRange(resolvedOf(c), start, end);
+
+        // Open and In Progress show the current state, whenever the complaint was raised.
+        // Resolved follows the date it was resolved. "All" shows every complaint that was
+        // raised, started or resolved inside the selected window.
+        const list = complaints
+          .filter((c: any) => {
+            switch (reportId) {
+              case 'open-complaints':
+                return c.status === 'Open';
+              case 'in-progress-complaints':
+                return c.status === 'In Progress';
+              case 'resolved-complaints':
+                return (
+                  c.status === 'Resolved' &&
+                  (dateRange === 'All Records' || inRange(resolvedOf(c) ?? raisedOf(c), start, end))
+                );
+              default:
+                return dateRange === 'All Records' || raisedIn(c) || progressIn(c) || resolvedIn(c);
+            }
+          })
+          // Most recent activity first
+          .sort((a: any, b: any) => {
+            const last = (c: any) =>
+              Math.max(raisedOf(c)?.getTime() ?? 0, progressOf(c)?.getTime() ?? 0, resolvedOf(c)?.getTime() ?? 0);
+            return last(b) - last(a);
+          });
+
+        const daysToResolve = (c: any): number | null => {
+          const a = raisedOf(c);
+          const b = resolvedOf(c);
+          return a && b ? Math.max(0, Math.round((b.getTime() - a.getTime()) / 86400000)) : null;
+        };
+        const resolvedDays = list.map(daysToResolve).filter((d): d is number => d !== null);
+        const avgDays = resolvedDays.length
+          ? (resolvedDays.reduce((s, d) => s + d, 0) / resolvedDays.length).toFixed(1)
+          : '—';
+        const resolvedCount = list.filter((c: any) => c.status === 'Resolved').length;
+        const resolutionRate = list.length ? Math.round((resolvedCount / list.length) * 100) : 0;
+
+        const timeline = (c: any) =>
+          [
+            `Raised ${c.date}`,
+            c.inProgressOn ? `In Progress ${c.inProgressOn}` : null,
+            c.resolvedOn ? `Resolved ${c.resolvedOn}` : null,
+          ]
+            .filter(Boolean)
+            .join(' → ');
 
         kpis.push(
           { label: 'Total', value: String(list.length) },
-          { label: 'Open', value: String(list.filter((c) => c.status === 'Open').length), color: colors.error },
-          { label: 'In Progress', value: String(list.filter((c) => c.status === 'In Progress').length), color: colors.warning },
-          { label: 'Resolved', value: String(list.filter((c) => c.status === 'Resolved').length), color: colors.success }
+          { label: 'Open', value: String(list.filter((c: any) => c.status === 'Open').length), color: colors.error },
+          { label: 'In Progress', value: String(list.filter((c: any) => c.status === 'In Progress').length), color: colors.warning },
+          { label: 'Resolved', value: String(resolvedCount), color: colors.success }
         );
-        list.forEach((c) => {
+        if (reportId === 'all-complaints') {
+          // Day-to-day activity inside the selected window
+          kpis.push(
+            { label: 'Raised in Window', value: String(complaints.filter(raisedIn).length) },
+            { label: 'Started in Window', value: String(complaints.filter(progressIn).length), color: colors.warning },
+            { label: 'Resolved in Window', value: String(complaints.filter(resolvedIn).length), color: colors.success }
+          );
+        }
+        kpis.push(
+          { label: 'Resolution Rate', value: `${resolutionRate}%`, color: colors.success },
+          { label: 'Avg. Days to Resolve', value: avgDays }
+        );
+
+        list.forEach((c: any) => {
           rows.push({
             primary: `${c.residentName} · ${c.room}`,
-            secondary: c.category,
-            tertiary: `${c.description} · ${c.date}`,
-            badge: { label: c.status, color: c.status === 'Open' ? colors.error : c.status === 'In Progress' ? colors.warning : colors.success },
+            secondary: `${c.category}: ${c.description}`,
+            tertiary: timeline(c),
+            badge: {
+              label: c.status,
+              color: c.status === 'Open' ? colors.error : c.status === 'In Progress' ? colors.warning : colors.success,
+            },
           });
         });
-        columns = ['Resident', 'Room', 'Category', 'Description', 'Date', 'Status'];
-        pdfRows = list.map((c) => [c.residentName, c.room, c.category, c.description, c.date, c.status]);
+
+        columns = ['Resident', 'Room', 'Category', 'Description', 'Raised On', 'In Progress On', 'Resolved On', 'Days to Resolve', 'Status'];
+        pdfRows = list.map((c: any) => [
+          c.residentName,
+          c.room,
+          c.category,
+          c.description,
+          c.date,
+          c.inProgressOn ?? '—',
+          c.resolvedOn ?? '—',
+          String(daysToResolve(c) ?? '—'),
+          c.status,
+        ]);
         break;
       }
 
@@ -448,6 +521,21 @@ export default function AdminReportDetailScreen() {
     try {
       setExporting(true);
       const { uri } = await Print.printToFileAsync({ html: buildReportHtml(), base64: false });
+
+      // Record the export in Audit History. A logging failure must not block the PDF.
+      if (propertyId) {
+        try {
+          await logReportHistory(propertyId, {
+            reportId,
+            title: reportTitle,
+            scope: `${dateRange} (${rangeLabel})`,
+            format: 'PDF',
+          });
+        } catch (e) {
+          console.warn('Could not log report export', e);
+        }
+      }
+
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: reportTitle, UTI: 'com.adobe.pdf' });
       } else {
@@ -563,4 +651,4 @@ const styles = StyleSheet.create({
   footer: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.background },
   downloadButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.md },
   downloadButtonDisabled: { opacity: 0.6 },
-});;
+});

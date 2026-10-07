@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, ReactNod
 import { Alert } from 'react-native';
 import { getAuth, onAuthStateChanged, signInWithPhoneNumber, signOut } from '@react-native-firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc } from '@react-native-firebase/firestore';
+import { collection, query, where, limit, getDocs } from '@react-native-firebase/firestore';
 
 // NOTE: the file and hook names (MockAuthProvider / useMockAuth) are kept on purpose so
 // every screen that already imports them keeps working. Inside, login is now real Firebase
@@ -74,6 +75,18 @@ function buildInitialProfile(phoneDigits: string): UserProfile {
   };
 }
 
+// Is this phone number one of the residents an admin has added?
+async function findResidentProfile(phoneDigits: string): Promise<UserProfile | null> {
+  const snap = await getDocs(
+    query(collection(getFirestore(), 'residents'), where('phoneKey', '==', last10(phoneDigits)), limit(1))
+  );
+  if (snap.empty) return null;
+  const d: any = snap.docs[0];
+  const data = d.data();
+  if (data.archived) return null;
+  return { phone: phoneDigits, name: data.name, role: 'resident', residentId: d.id, propertyIds: [] };
+}
+
 type MockAuthContextType = {
   role: Role;
   residentId: string | null;
@@ -91,6 +104,7 @@ type MockAuthContextType = {
   loginWithGoogle: () => void;
   logout: () => void;
   addPropertyToCurrentAdmin: (propertyId: string) => void;
+  removePropertyFromCurrentAdmin: (propertyId: string) => void;
 };
 
 const MockAuthContext = createContext<MockAuthContextType | undefined>(undefined);
@@ -136,8 +150,24 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
         let profile: UserProfile;
         if (snapExists(snap)) {
           profile = snap.data() as UserProfile;
+
+          // A resident's saved profile can point at the wrong (or a deleted) resident record,
+          // e.g. the old demo id "r1". Look the phone number up again on every login and
+          // correct the link when a resident with this number exists.
+          if (profile.role === 'resident') {
+            try {
+              const found = await findResidentProfile(cleanPhone(user.phoneNumber ?? ''));
+              if (found && found.residentId !== profile.residentId) {
+                await updateDoc(ref, { residentId: found.residentId });
+                profile = { ...profile, residentId: found.residentId, name: found.name };
+              }
+            } catch (e) {
+              // Keep the saved profile if the re-check cannot run (e.g. offline).
+            }
+          }
         } else {
-          profile = buildInitialProfile(cleanPhone(user.phoneNumber ?? ''));
+          const digits = cleanPhone(user.phoneNumber ?? '');
+          profile = (await findResidentProfile(digits)) ?? buildInitialProfile(digits);
           await setDoc(ref, { ...profile, createdAt: Date.now() });
         }
 
@@ -146,8 +176,11 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
         setAdminPropertyIds(profile.role === 'admin' ? profile.propertyIds ?? [] : null);
         setCurrentPhone(profile.phone);
         setPendingPhone(null);
-      } catch (e) {
-        setAuthError('Could not load your account. Check your internet connection and try again.');
+      } catch (e: any) {
+        console.warn('PROFILE LOAD FAILED:', e?.code, e?.message);
+        setAuthError(
+          `Could not load your account (${e?.code ?? e?.message ?? 'unknown error'}). Check your internet connection and try again.`
+        );
         await signOut(getAuth());
         clearSession();
       } finally {
@@ -227,6 +260,21 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const removePropertyFromCurrentAdmin = (propertyId: string) => {
+    if (!adminPropertyIds) return;
+    const next = adminPropertyIds.filter((id) => id !== propertyId);
+    setAdminPropertyIds(next);
+
+    if (currentPhone && last10(currentPhone) === last10(PRIMARY_ADMIN_PHONE)) {
+      setMainAdminPropertyIds(next);
+    }
+
+    const uid = getAuth().currentUser?.uid;
+    if (uid) {
+      updateDoc(doc(getFirestore(), 'users', uid), { propertyIds: next }).catch(() => {});
+    }
+  };
+
   return (
     <MockAuthContext.Provider
       value={{
@@ -242,6 +290,7 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
         loginWithGoogle,
         logout,
         addPropertyToCurrentAdmin,
+        removePropertyFromCurrentAdmin,
       }}
     >
       {children}

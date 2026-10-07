@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -10,7 +10,30 @@ import { useAdmin } from '../../context/AdminContext';
 
 export default function AdminPropertiesScreen() {
   const navigation = useNavigation<any>();
-  const { residents, properties, rooms } = useAdmin();
+  const { residents, properties, rooms, deleteProperty } = useAdmin();
+
+  const openEdit = (propertyId: string) =>
+    navigation.navigate('AdminPropertyForm', { propertyId });
+
+  const confirmDelete = (propertyId: string, name: string, roomCount: number) => {
+    Alert.alert(
+      'Delete Property',
+      `Delete "${name}" and its ${roomCount} room${roomCount !== 1 ? 's' : ''}?\n\nThis cannot be undone. Past payments, complaints and archived residents of this property will no longer be shown in the app.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await deleteProperty(propertyId);
+            if (!result.ok) {
+              Alert.alert('Cannot Delete', result.message ?? 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -57,12 +80,29 @@ export default function AdminPropertiesScreen() {
                   {property.images.length} photo{property.images.length !== 1 ? 's' : ''}
                 </Text>
               </View>
+
               <TouchableOpacity
-                onPress={() => navigation.navigate('AdminPropertyForm', { propertyId: property.id })}
+                onPress={() => openEdit(property.id)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: spacing.xs }}
+              >
+                <Ionicons name="pencil-outline" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => openEdit(property.id)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 style={{ padding: spacing.xs }}
               >
                 <Ionicons name="camera-outline" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => confirmDelete(property.id, property.name, propertyRooms.length)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: spacing.xs }}
+              >
+                <Ionicons name="trash-outline" size={20} color={colors.error} />
               </TouchableOpacity>
             </TouchableOpacity>
           );

@@ -18,13 +18,12 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin, isDailyGuestActiveNow } from '../../context/AdminContext';
+import { AdminDailyGuest } from '../../constants/mockData';
 
 /* ------------------------------------------------------------------ */
 /* Settings you may want to change                                     */
 /* ------------------------------------------------------------------ */
 
-// Route names used for taps on this screen.
-const ROOMS_ROUTE = 'AdminRooms';
 const RESIDENT_DETAIL_ROUTE = 'AdminResidentDetail';
 
 // A maintenance ticket that is still open after this many days counts as "Overdue".
@@ -118,6 +117,37 @@ const inRange = (dateStr: string | null | undefined, range: Range) => {
   const d = parseDisplayDate(dateStr);
   return !!d && d.getTime() >= range.start.getTime() && d.getTime() <= range.end.getTime();
 };
+
+// Documents saved in Firestore carry a propertyId even though the TypeScript types don't list it.
+const propertyIdOf = (x: any): string | undefined => x?.propertyId || undefined;
+
+// Was this resident living here at the end of `date`? (joined by then, not archived by then)
+function residentPresentAt(r: any, date: Date): boolean {
+  const joined = parseDisplayDate(r.joiningDate);
+  if (joined && joined.getTime() > date.getTime()) return false;
+  const archivedOn = r.archived ? parseDisplayDate(r.archivedOn) : null;
+  if (archivedOn && archivedOn.getTime() <= date.getTime()) return false;
+  return true;
+}
+
+// Which room was this resident in at `date`? Uses the room history when there is one.
+function residentRoomAt(r: any, date: Date): string | null {
+  const history: any[] = r.roomHistory ?? [];
+  const match = history.find((h) => {
+    const from = parseDisplayDate(h.fromDate);
+    const to = parseDisplayDate(h.toDate);
+    return (!from || from.getTime() <= date.getTime()) && (!to || to.getTime() > date.getTime());
+  });
+  return match?.roomId ?? r.roomId ?? null;
+}
+
+// Was this day guest occupying a bed at the end of `date`?
+function guestActiveAt(g: AdminDailyGuest, date: Date): boolean {
+  if (g.checkInTimestamp > date.getTime()) return false;
+  const vacate = parseDisplayDate(g.vacatingDate);
+  if (!vacate) return true;
+  return endOfDay(vacate).getTime() >= date.getTime();
+}
 
 const PERIODS: { key: PeriodKey; label: string }[] = [
   { key: 'today', label: 'Today' },
@@ -410,7 +440,16 @@ function EmptyNote({ text }: { text: string }) {
 
 export default function AdminAnalyticsScreen() {
   const navigation = useNavigation<any>();
-  const { residents, rooms, dailyGuests, paymentRecords, complaints, identityDocuments, properties } = useAdmin();
+  const {
+    residents,
+    archivedResidents,
+    rooms,
+    dailyGuests,
+    paymentRecords,
+    complaints,
+    identityDocuments,
+    properties,
+  } = useAdmin();
 
   const [propertyFilter, setPropertyFilter] = useState<string | 'all'>('all');
   const [period, setPeriod] = useState<PeriodKey>('month');
@@ -435,22 +474,57 @@ export default function AdminAnalyticsScreen() {
   const data = useMemo(() => {
     const inProp = (pid: string) => propertyFilter === 'all' || pid === propertyFilter;
 
+    // Occupancy is measured at the END of the selected period (never later than now).
+    const asOf = new Date(Math.min(range.end.getTime(), Date.now()));
+    const asOfIsToday = startOfDay(asOf).getTime() === startOfDay(new Date()).getTime();
+
+    const allResidents: any[] = [...residents, ...archivedResidents];
+    const sAllResidents = allResidents.filter((r) => inProp(r.propertyId));
+    const residentIds = new Set(sAllResidents.map((r) => r.id));
+    const residentNames = new Set(sAllResidents.map((r) => r.name));
+
     const sRooms = rooms.filter((r) => inProp(r.propertyId));
     const sResidents = residents.filter((r) => inProp(r.propertyId));
     const sGuests = dailyGuests.filter((g) => inProp(g.propertyId));
-    const residentIds = new Set(sResidents.map((r) => r.id));
-    const residentNames = new Set(sResidents.map((r) => r.name));
-    const sPayments = paymentRecords.filter((p) => residentIds.has(p.residentId));
-    const sComplaints = complaints.filter((c) => residentNames.has(c.residentName));
-    const sDocs = identityDocuments.filter((d) => residentIds.has(d.residentId));
+    const activeResidentIds = new Set(sResidents.map((r) => r.id));
+
+    // Payments and complaints are matched by propertyId; older records fall back to the resident.
+    const sPayments = paymentRecords.filter((p) => {
+      const pid = propertyIdOf(p);
+      return pid ? inProp(pid) : residentIds.has(p.residentId);
+    });
+    const sComplaints = complaints.filter((c) => {
+      const pid = propertyIdOf(c);
+      if (pid) return inProp(pid);
+      const rid = (c as any).residentId;
+      return rid ? residentIds.has(rid) : residentNames.has(c.residentName);
+    });
+    const sDocs = identityDocuments.filter((d) => activeResidentIds.has(d.residentId));
     const sExpenses = EXPENSE_ENTRIES.filter((e) => !e.propertyId || inProp(e.propertyId));
+
+    // How many people occupy each room at the chosen moment
+    const occupancyByRoom = new Map<string, number>();
+    const bump = (roomId: string | null | undefined) => {
+      if (roomId) occupancyByRoom.set(roomId, (occupancyByRoom.get(roomId) ?? 0) + 1);
+    };
+    if (asOfIsToday) {
+      residents.forEach((r) => bump(r.roomId));
+      dailyGuests.forEach((g) => {
+        if (isDailyGuestActiveNow(g)) bump(g.roomId);
+      });
+    } else {
+      allResidents.forEach((r) => {
+        if (residentPresentAt(r, asOf)) bump(residentRoomAt(r, asOf));
+      });
+      dailyGuests.forEach((g) => {
+        if (guestActiveAt(g, asOf)) bump(g.roomId);
+      });
+    }
 
     // rooms with occupancy
     const roomRows = sRooms
       .map((room) => {
-        const res = sResidents.filter((r) => r.roomId === room.id).length;
-        const gst = sGuests.filter((g) => g.roomId === room.id && isDailyGuestActiveNow(g)).length;
-        const occupied = Math.min(room.capacity, res + gst);
+        const occupied = Math.min(room.capacity, occupancyByRoom.get(room.id) ?? 0);
         return {
           id: room.id,
           propertyId: room.propertyId,
@@ -553,6 +627,9 @@ export default function AdminAnalyticsScreen() {
       sComplaints,
       sExpenses,
       roomRows,
+      occupancyByRoom,
+      asOfIsToday,
+      asOfLabel: formatDay(asOf),
       totalBeds,
       occupiedBeds,
       occupancyPercent,
@@ -582,12 +659,26 @@ export default function AdminAnalyticsScreen() {
       docsPending,
       activeGuests,
     };
-  }, [propertyFilter, rooms, residents, dailyGuests, paymentRecords, complaints, identityDocuments, range]);
+  }, [
+    propertyFilter,
+    rooms,
+    residents,
+    archivedResidents,
+    dailyGuests,
+    paymentRecords,
+    complaints,
+    identityDocuments,
+    range,
+  ]);
 
   const netBalance = data.collections - data.totalSpend;
   const partialRooms = data.roomRows.filter((r) => r.occupied > 0 && r.occupied < r.capacity).length;
   const fullRooms = data.roomRows.filter((r) => r.occupied >= r.capacity).length;
   const vacantRooms = data.roomRows.filter((r) => r.occupied === 0).length;
+
+  const asOfText = data.asOfIsToday
+    ? 'Live occupancy (today)'
+    : `Occupancy as of end of ${data.asOfLabel}`;
 
   /* ---------------- trend helpers ---------------- */
 
@@ -636,7 +727,12 @@ export default function AdminAnalyticsScreen() {
 
   /* ---------------- actions ---------------- */
 
-  const goRooms = () => navigation.navigate(ROOMS_ROUTE);
+  // Opens the rooms of the selected property (or the first one when "All Properties" is selected).
+  const goRooms = () => {
+    const pid = propertyFilter !== 'all' ? propertyFilter : properties[0]?.id;
+    if (pid) navigation.navigate('AdminPropertyRooms', { propertyId: pid });
+  };
+  const goRoomDetail = (roomId: string) => navigation.navigate('AdminRoomDetail', { roomId });
   const goResident = (id: string) => navigation.navigate(RESIDENT_DETAIL_ROUTE, { residentId: id });
 
   const handleExport = async () => {
@@ -645,7 +741,7 @@ export default function AdminAnalyticsScreen() {
       `Period: ${periodLabel}`,
       '',
       `Residents: ${data.sResidents.length} (${data.activeResidents.length} active)`,
-      `Occupancy: ${data.occupancyPercent}% (${data.occupiedBeds}/${data.totalBeds} beds)`,
+      `Occupancy: ${data.occupancyPercent}% (${data.occupiedBeds}/${data.totalBeds} beds) — ${asOfText}`,
       `Rent collected: ${formatINR(data.rentCollected)} (${data.paidCount} payments)`,
       `Day guest revenue: ${formatINR(data.guestRevenue)}`,
       `Pending dues: ${formatINR(data.dueTotal)} (${data.defaulters.length} defaulters)`,
@@ -679,52 +775,52 @@ export default function AdminAnalyticsScreen() {
     <>
       <View style={styles.statGrid}>
         <StatCard
-        label="Total Residents"
-        value={data.sResidents.length}
-        sub={`${data.activeResidents.length} Active`}
-        icon="people"
-        color={colors.primary}
-        onPress={() => setSection('residents')}
+          label="Total Residents"
+          value={data.sResidents.length}
+          sub={`${data.activeResidents.length} Active`}
+          icon="people"
+          color={colors.primary}
+          onPress={() => setSection('residents')}
         />
         <StatCard
-        label="Occupancy Rate"
-        value={`${data.occupancyPercent}%`}
-        sub={`${data.occupiedBeds} / ${data.totalBeds} Beds`}
-        icon="bed"
-        color={data.occupancyPercent >= 70 ? colors.success : colors.warning}
-        onPress={() => setSection('occupancy')}
+          label="Occupancy Rate"
+          value={`${data.occupancyPercent}%`}
+          sub={`${data.occupiedBeds} / ${data.totalBeds} Beds`}
+          icon="bed"
+          color={data.occupancyPercent >= 70 ? colors.success : colors.warning}
+          onPress={() => setSection('occupancy')}
         />
         <StatCard
-        label="Rent Collected"
-        value={formatINR(data.rentCollected)}
-        sub={`${data.paidCount} payments`}
-        icon="receipt"
-        color={colors.success}
-        onPress={() => setSection('revenue')}
+          label="Rent Collected"
+          value={formatINR(data.rentCollected)}
+          sub={`${data.paidCount} payments`}
+          icon="receipt"
+          color={colors.success}
+          onPress={() => setSection('revenue')}
         />
         <StatCard
-        label="Pending Dues"
-        value={formatINR(data.dueTotal)}
-        sub={`${data.defaulters.length} Defaulters`}
-        icon="alert-circle"
-        color={colors.error}
-        onPress={() => setSection('dues')}
+          label="Pending Dues"
+          value={formatINR(data.dueTotal)}
+          sub={`${data.defaulters.length} Defaulters`}
+          icon="alert-circle"
+          color={colors.error}
+          onPress={() => setSection('dues')}
         />
         <StatCard
-        label="Operating Expenses"
-        value={formatINR(data.totalSpend)}
-        sub={`${data.expenseCount} entries`}
-        icon="cash"
-        color={colors.primary}
-        onPress={() => setSection('expenses')}
+          label="Operating Expenses"
+          value={formatINR(data.totalSpend)}
+          sub={`${data.expenseCount} entries`}
+          icon="cash"
+          color={colors.primary}
+          onPress={() => setSection('expenses')}
         />
         <StatCard
-        label="Maintenance Cost"
-        value={formatINR(data.maintenanceSpend)}
-        sub={`${data.ticketsInRange.length} tickets`}
-        icon="construct"
-        color={colors.primary}
-        onPress={() => setSection('maintenance')}
+          label="Maintenance Cost"
+          value={formatINR(data.maintenanceSpend)}
+          sub={`${data.ticketsInRange.length} tickets`}
+          icon="construct"
+          color={colors.primary}
+          onPress={() => setSection('maintenance')}
         />
       </View>
 
@@ -738,6 +834,7 @@ export default function AdminAnalyticsScreen() {
           </View>
         }
       >
+        <Text style={[typography.caption, styles.asOf]}>{asOfText}</Text>
         <Gauge percent={data.occupancyPercent} caption={`${data.occupiedBeds} / ${data.totalBeds} Beds`} />
         <View style={styles.legendRow}>
           <View style={styles.legendItem}>
@@ -813,6 +910,7 @@ export default function AdminAnalyticsScreen() {
     return (
       <>
         <Card title="Occupancy Overview">
+          <Text style={[typography.caption, styles.asOf]}>{asOfText}</Text>
           <Gauge percent={data.occupancyPercent} caption={`${data.occupiedBeds} / ${data.totalBeds} Beds`} />
           <MetricGrid
             items={[
@@ -870,6 +968,7 @@ export default function AdminAnalyticsScreen() {
 
   const renderRevenue = () => {
     const methods = Object.entries(data.byMethod).sort((a, b) => b[1] - a[1]);
+    const recentPaid = data.sPayments.filter((p) => p.status === 'Paid' && inRange(p.paidOn, range));
     return (
       <>
         <Card title="Revenue Summary">
@@ -898,25 +997,20 @@ export default function AdminAnalyticsScreen() {
           ))}
         </Card>
         <Card title="Recent Payments">
-          {data.sPayments.filter((p) => p.status === 'Paid' && inRange(p.paidOn, range)).length === 0 && (
-            <EmptyNote text="No payments in this period." />
-          )}
-          {data.sPayments
-            .filter((p) => p.status === 'Paid' && inRange(p.paidOn, range))
-            .slice(0, 8)
-            .map((p) => {
-              const res = data.sResidents.find((r) => r.id === p.residentId);
-              return (
-                <ListRow
-                  key={p.id}
-                  title={res?.name ?? 'Resident'}
-                  subtitle={`${p.month} · ${p.paidOn ?? ''}`}
-                  right={formatINR(p.amount)}
-                  rightColor={colors.success}
-                  onPress={res ? () => goResident(res.id) : undefined}
-                />
-              );
-            })}
+          {recentPaid.length === 0 && <EmptyNote text="No payments in this period." />}
+          {recentPaid.slice(0, 8).map((p) => {
+            const res = data.sResidents.find((r) => r.id === p.residentId);
+            return (
+              <ListRow
+                key={p.id}
+                title={res?.name ?? 'Resident'}
+                subtitle={`${p.month} · ${p.paidOn ?? ''}`}
+                right={formatINR(p.amount)}
+                rightColor={colors.success}
+                onPress={res ? () => goResident(res.id) : undefined}
+              />
+            );
+          })}
         </Card>
       </>
     );
@@ -1002,6 +1096,7 @@ export default function AdminAnalyticsScreen() {
   const renderRooms = () => (
     <>
       <Card title="Room & Vacancy Overview">
+        <Text style={[typography.caption, styles.asOf]}>{asOfText}</Text>
         <MetricGrid
           items={[
             { label: 'Total Rooms', value: data.roomRows.length },
@@ -1029,7 +1124,7 @@ export default function AdminAnalyticsScreen() {
               subtitle={`${propName ? `${propName} · ` : ''}${room.capacity} Sharing · ${room.occupied}/${room.capacity} filled`}
               right={room.vacant === 0 ? 'Full' : `${room.vacant} vacant`}
               rightColor={color}
-              onPress={goRooms}
+              onPress={() => goRoomDetail(room.id)}
             />
           );
         })}
@@ -1086,9 +1181,9 @@ export default function AdminAnalyticsScreen() {
           <ListRow
             key={cat}
             title={cat}
-            subtitle={`${v.total} total · ${v.open} open`}
-            right={formatINR(0)}
-            rightColor={colors.warning}
+            subtitle={`${v.total} total`}
+            right={`${v.open} open`}
+            rightColor={v.open > 0 ? colors.error : colors.success}
             onPress={() => navigation.navigate('AdminComplaints')}
           />
         ))}
@@ -1150,7 +1245,7 @@ export default function AdminAnalyticsScreen() {
         </View>
         {EXPENSE_ENTRIES.length === 0 && (
           <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.sm }]}>
-            No expenses recorded yet. Add entries to EXPENSE_ENTRIES at the top of this file to see them here.
+            No expenses recorded yet. Expense tracking has not been added to the app.
           </Text>
         )}
       </Card>
@@ -1167,12 +1262,16 @@ export default function AdminAnalyticsScreen() {
         const rows = rooms.filter((r) => r.propertyId === p.id);
         const beds = rows.reduce((s, r) => s + r.capacity, 0);
         const res = residents.filter((r) => r.propertyId === p.id);
-        const resIds = new Set(res.map((r) => r.id));
-        const guestsHere = dailyGuests.filter((g) => g.propertyId === p.id && isDailyGuestActiveNow(g)).length;
-        const occupied = Math.min(beds, res.length + guestsHere);
+        const occupied = rows.reduce(
+          (s, r) => s + Math.min(r.capacity, data.occupancyByRoom.get(r.id) ?? 0),
+          0
+        );
         const pct = beds === 0 ? 0 : Math.round((occupied / beds) * 100);
         const revenue = paymentRecords
-          .filter((pay) => resIds.has(pay.residentId) && pay.status === 'Paid' && inRange(pay.paidOn, range))
+          .filter((pay) => {
+            const pid = propertyIdOf(pay) ?? residents.find((r) => r.id === pay.residentId)?.propertyId;
+            return pid === p.id && pay.status === 'Paid' && inRange(pay.paidOn, range);
+          })
           .reduce((s, pay) => s + pay.amount, 0);
         return (
           <Card key={p.id} title={p.name}>
@@ -1210,7 +1309,13 @@ export default function AdminAnalyticsScreen() {
         <BarChart data={joinersTrend} color={colors.primary} />
       </Card>
       <Card title="Maintenance Requests — Last 6 Months">
-        <BarChart data={monthBuckets.map((b) => ({ label: b.label, value: data.sComplaints.filter((c) => inRange(c.date, b)).length }))} color={colors.warning} />
+        <BarChart
+          data={monthBuckets.map((b) => ({
+            label: b.label,
+            value: data.sComplaints.filter((c) => inRange(c.date, b)).length,
+          }))}
+          color={colors.warning}
+        />
       </Card>
     </>
   );
@@ -1247,22 +1352,24 @@ export default function AdminAnalyticsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-     
-       <View style={styles.header}>
-  <View style={{ flex: 1 }}>
-    <Text style={[typography.heading2, { color: colors.text }]}>Analytics & Insights</Text>
-    <TouchableOpacity style={styles.propertyButton} activeOpacity={0.85} onPress={() => setPropertyModal(true)}>
-      <Ionicons name="business-outline" size={14} color={colors.primary} />
-      <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginHorizontal: 6 }]} numberOfLines={1}>
-        {selectedPropertyName}
-      </Text>
-      <Ionicons name="chevron-down" size={14} color={colors.primary} />
-    </TouchableOpacity>
-  </View>
-  <TouchableOpacity onPress={handleExport} style={styles.headerButton}>
-    <Ionicons name="download-outline" size={22} color={colors.text} />
-  </TouchableOpacity>
-</View>
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={[typography.heading2, { color: colors.text }]}>Analytics & Insights</Text>
+          <TouchableOpacity style={styles.propertyButton} activeOpacity={0.85} onPress={() => setPropertyModal(true)}>
+            <Ionicons name="business-outline" size={14} color={colors.primary} />
+            <Text
+              style={[typography.caption, { color: colors.primary, fontWeight: '700', marginHorizontal: 6 }]}
+              numberOfLines={1}
+            >
+              {selectedPropertyName}
+            </Text>
+            <Ionicons name="chevron-down" size={14} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity onPress={handleExport} style={styles.headerButton}>
+          <Ionicons name="download-outline" size={22} color={colors.text} />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll} contentContainerStyle={styles.chipContent}>
         {PERIODS.map((p) => (
@@ -1346,7 +1453,7 @@ export default function AdminAnalyticsScreen() {
           </View>
         </View>
       </Modal>
-
+                
       {pickerTarget && (
         <DateTimePicker
           value={customRange[pickerTarget]}
@@ -1386,28 +1493,27 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   chipScroll: {
-  flexGrow: 0,
-  height: 44,
-  marginBottom: spacing.xs,
-},
+    flexGrow: 0,
+    height: 44,
+    marginBottom: spacing.xs,
+  },
   chipContent: {
-  paddingHorizontal: spacing.md,
-  alignItems: 'center',
-},
-
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+  },
   chip: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  paddingHorizontal: spacing.md,
-  paddingVertical: 10,
-  minHeight: 36,
-  borderRadius: radius.full,
-  backgroundColor: colors.surface,
-  borderWidth: 1,
-  borderColor: colors.border,
-  marginRight: spacing.xs,
-  overflow: 'visible',
-},
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    minHeight: 36,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginRight: spacing.xs,
+    overflow: 'visible',
+  },
   scrollContent: { padding: spacing.md, paddingBottom: spacing.xl * 2 },
   card: {
     backgroundColor: colors.surface,
@@ -1418,6 +1524,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
+  asOf: { color: colors.textMuted, marginBottom: spacing.sm },
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   statCard: {
     width: '48.5%',

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Modal,
   Switch,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +20,18 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
+import {
+  Schedule,
+  Frequency,
+  HistoryItem,
+  subscribeSchedules,
+  subscribeHistory,
+  createSchedule,
+  updateSchedule,
+  setScheduleEnabled,
+  markScheduleSent,
+  removeSchedule,
+} from '../../services/reportsService';
 
 // Every id below is handled by AdminReportDetailScreen, so tapping any row opens real data.
 type Category = 'Resident' | 'Room' | 'Financial' | 'Complaint';
@@ -52,35 +65,19 @@ export const REPORTS: ReportDef[] = [
   { id: 'all-complaints', category: 'Complaint', title: 'All Complaints', description: 'Every complaint with category and status' },
 ];
 
-const HISTORY = [
-  { id: '1', title: 'Rent Collection', scope: 'This Month (01 Sep - 30 Sep 2026)', when: '10 Sep 2026, 09:30 AM', size: '142 KB', icon: 'document-text-outline', color: colors.error },
-  { id: '2', title: 'Room Occupancy', scope: 'All Records', when: '09 Sep 2026, 06:15 PM', size: '88 KB', icon: 'grid-outline', color: colors.success },
-  { id: '3', title: 'Pending Dues', scope: 'This Month', when: '08 Sep 2026, 11:00 AM', size: '24 KB', icon: 'calculator-outline', color: colors.primary },
-];
+// History row look, by report category.
+const CATEGORY_STYLE: Record<Category, { icon: string; color: string }> = {
+  Resident: { icon: 'people-outline', color: colors.primary },
+  Room: { icon: 'grid-outline', color: colors.success },
+  Financial: { icon: 'document-text-outline', color: colors.error },
+  Complaint: { icon: 'chatbox-ellipses-outline', color: colors.warning },
+};
 
 // ───────────────────────── Scheduled reports ─────────────────────────
-type Frequency = 'Daily' | 'Weekly' | 'Monthly';
 const FREQUENCIES: Frequency[] = ['Daily', 'Weekly', 'Monthly'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_DAYS = [1, 5, 10, 15, 20, 25, 28];
 const RANGE_OPTIONS = ['Today', 'Yesterday', 'This Week', 'This Month', 'Last Month', 'This Year', 'All Records'];
-
-interface Schedule {
-  id: string;
-  reportId: string;
-  frequency: Frequency;
-  weekday: number; // 0 = Sun
-  monthDay: number; // 1-28
-  hour: number;
-  minute: number;
-  range: string;
-  enabled: boolean;
-  lastSent?: string;
-}
-
-// Kept at module level so schedules survive leaving and re-opening this screen
-// while the app is running. They reset when the app is fully closed.
-let savedSchedules: Schedule[] = [];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -122,16 +119,30 @@ function formatNextRun(s: Schedule): string {
   return `${day}, ${formatTime(d.getHours(), d.getMinutes())}`;
 }
 
+const formatStamp = (d: Date | null) =>
+  d
+    ? `${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}, ${formatTime(d.getHours(), d.getMinutes())}`
+    : '—';
+
 export default function AdminReportsScreen() {
   const navigation = useNavigation<any>();
   const { properties } = useAdmin();
+
+  const propertyId: string | undefined = properties[0]?.id;
+  const propertyName = properties[0]?.name ?? 'My PG';
 
   const [view, setView] = useState<'list' | 'history' | 'scheduled'>('list');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<'All' | Category>('All');
 
-  // ---- scheduled reports state ----
-  const [schedules, setSchedules] = useState<Schedule[]>(savedSchedules);
+  // ---- Firestore-backed state ----
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [loadingSched, setLoadingSched] = useState(true);
+  const [loadingHist, setLoadingHist] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  // ---- schedule form state ----
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [reportPickerOpen, setReportPickerOpen] = useState(false);
@@ -143,7 +154,34 @@ export default function AdminReportsScreen() {
   const [fTime, setFTime] = useState(new Date(2000, 0, 1, 9, 0));
   const [fRange, setFRange] = useState('This Month');
 
-  const propertyName = properties[0]?.name ?? 'My PG';
+  // Live subscriptions, re-created when the property changes.
+  useEffect(() => {
+    if (!propertyId) {
+      setSchedules([]);
+      setHistory([]);
+      setLoadingSched(false);
+      setLoadingHist(false);
+      return;
+    }
+    setLoadingSched(true);
+    setLoadingHist(true);
+    const onErr = (e: Error) => {
+      console.warn('Reports Firestore error', e);
+      setLoadingSched(false);
+      setLoadingHist(false);
+    };
+    try {
+      const unsubS = subscribeSchedules(propertyId, (l) => { setSchedules(l); setLoadingSched(false); }, onErr);
+      const unsubH = subscribeHistory(propertyId, (l) => { setHistory(l); setLoadingHist(false); }, onErr);
+      return () => {
+        unsubS();
+        unsubH();
+      };
+    } catch (e: any) {
+      // e.g. "Not signed in"
+      onErr(e);
+    }
+  }, [propertyId]);
 
   const sections = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -163,11 +201,6 @@ export default function AdminReportsScreen() {
   const screenTitle = view === 'list' ? 'Reports & Audits' : view === 'history' ? 'Report History & Audit' : 'Scheduled Reports';
 
   // ---- schedule actions ----
-  const commit = (list: Schedule[]) => {
-    savedSchedules = list;
-    setSchedules(list);
-  };
-
   const openNewSchedule = () => {
     setEditing(null);
     setFReportId('');
@@ -192,12 +225,16 @@ export default function AdminReportsScreen() {
     setFormOpen(true);
   };
 
-  const saveSchedule = () => {
+  const saveSchedule = async () => {
+    if (!propertyId) {
+      Alert.alert('No Property', 'Add a property before scheduling reports.');
+      return;
+    }
     if (!fReportId) {
       Alert.alert('Select a Report', 'Choose which report you want to schedule.');
       return;
     }
-    const base = {
+    const input = {
       reportId: fReportId,
       frequency: fFreq,
       weekday: fWeekday,
@@ -206,31 +243,55 @@ export default function AdminReportsScreen() {
       minute: fTime.getMinutes(),
       range: fRange,
     };
-    if (editing) {
-      commit(schedules.map((s) => (s.id === editing.id ? { ...s, ...base } : s)));
-    } else {
-      commit([...schedules, { id: String(Date.now()), enabled: true, ...base }]);
+    try {
+      setSaving(true);
+      if (editing) await updateSchedule(editing.id, propertyId, input);
+      else await createSchedule(propertyId, input);
+      setShowTimePicker(false);
+      setFormOpen(false);
+    } catch (e: any) {
+      Alert.alert('Could not save', e?.message ?? 'Please try again.');
+    } finally {
+      setSaving(false);
     }
-    setShowTimePicker(false);
-    setFormOpen(false);
   };
 
-  const toggleSchedule = (id: string, value: boolean) =>
-    commit(schedules.map((s) => (s.id === id ? { ...s, enabled: value } : s)));
+  const toggleSchedule = async (id: string, value: boolean) => {
+    try {
+      await setScheduleEnabled(id, value);
+    } catch (e: any) {
+      Alert.alert('Could not update', e?.message ?? 'Please try again.');
+    }
+  };
 
   const deleteSchedule = (s: Schedule) => {
     const title = REPORTS.find((r) => r.id === s.reportId)?.title ?? 'this schedule';
     Alert.alert('Delete Schedule', `Remove the schedule for ${title}?`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => commit(schedules.filter((x) => x.id !== s.id)) },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await removeSchedule(s.id);
+          } catch (e: any) {
+            Alert.alert('Could not delete', e?.message ?? 'Please try again.');
+          }
+        },
+      },
     ]);
   };
 
   // Opens the report with the schedule's date range and generates the PDF straight away.
-  const sendNow = (s: Schedule) => {
+  // The detail screen records the export in Audit History, so it is not logged here.
+  const sendNow = async (s: Schedule) => {
     const r = REPORTS.find((x) => x.id === s.reportId);
     if (!r) return;
-    commit(schedules.map((x) => (x.id === s.id ? { ...x, lastSent: new Date().toLocaleString('en-GB') } : x)));
+    try {
+      await markScheduleSent(s.id);
+    } catch (e: any) {
+      Alert.alert('Could not record this send', e?.message ?? 'The report will still open.');
+    }
     navigation.navigate('AdminReportDetail', { reportId: r.id, title: r.title, range: s.range, autoExport: true });
   };
 
@@ -274,7 +335,9 @@ export default function AdminReportsScreen() {
               <Ionicons name="time-outline" size={22} color={colors.primary} />
               <View style={{ flex: 1, marginLeft: spacing.sm }}>
                 <Text style={[typography.bodyBold, { color: colors.text }]}>Audit History</Text>
-                <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>Generated files</Text>
+                <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+                  {history.length > 0 ? `${history.length} generated` : 'Generated files'}
+                </Text>
               </View>
             </TouchableOpacity>
           </View>
@@ -343,8 +406,9 @@ export default function AdminReportsScreen() {
           <View style={styles.infoBox}>
             <Ionicons name="information-circle-outline" size={18} color={colors.warning} />
             <Text style={[typography.caption, { color: colors.text, flex: 1, marginLeft: spacing.xs }]}>
-              Each schedule shows when its report is due. Tap "Send now" to generate the PDF and share it by WhatsApp,
-              email or Drive. Fully automatic sending needs a server and isn't available yet.
+              Schedules are saved to your account. Each one shows when its report is due. Tap "Send now" to generate the
+              PDF and share it by WhatsApp, email or Drive. Fully automatic sending needs a server (e.g. Cloud Functions)
+              and isn't available yet.
             </Text>
           </View>
 
@@ -353,7 +417,9 @@ export default function AdminReportsScreen() {
             <Text style={[typography.button, { color: colors.white, marginLeft: spacing.xs }]}>New Schedule</Text>
           </TouchableOpacity>
 
-          {schedules.length === 0 && (
+          {loadingSched && <ActivityIndicator style={{ marginTop: spacing.xl }} color={colors.primary} />}
+
+          {!loadingSched && schedules.length === 0 && (
             <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
               No schedules yet. Tap "New Schedule" to add one.
             </Text>
@@ -385,7 +451,7 @@ export default function AdminReportsScreen() {
                   </Text>
                 </View>
                 {!!s.lastSent && (
-                  <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>Last sent: {s.lastSent}</Text>
+                  <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>Last sent: {formatStamp(s.lastSent)}</Text>
                 )}
 
                 <View style={styles.schedActions}>
@@ -412,21 +478,36 @@ export default function AdminReportsScreen() {
           <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.sm }]}>
             Track all generated PDF, Excel, and CSV business records
           </Text>
-          {HISTORY.map((h) => (
-            <View key={h.id} style={styles.historyCard}>
-              <View style={[styles.historyIcon, { backgroundColor: `${h.color}20` }]}>
-                <Ionicons name={h.icon as any} size={22} color={h.color} />
+
+          {loadingHist && <ActivityIndicator style={{ marginTop: spacing.xl }} color={colors.primary} />}
+
+          {!loadingHist && history.length === 0 && (
+            <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
+              No reports generated yet.
+            </Text>
+          )}
+
+          {history.map((h) => {
+            const cat = REPORTS.find((r) => r.id === h.reportId)?.category;
+            const look = cat ? CATEGORY_STYLE[cat] : { icon: 'document-outline', color: colors.primary };
+            return (
+              <View key={h.id} style={styles.historyCard}>
+                <View style={[styles.historyIcon, { backgroundColor: `${look.color}20` }]}>
+                  <Ionicons name={look.icon as any} size={22} color={look.color} />
+                </View>
+                <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                  <Text style={[typography.bodyBold, { color: colors.text }]}>{h.title}</Text>
+                  <Text style={[typography.caption, { color: colors.warning, fontWeight: '600', marginTop: 2 }]}>{propertyName} · {h.scope}</Text>
+                  <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                    Generated: {formatStamp(h.generatedAt)} · {h.format}{h.sizeKb != null ? ` · ${h.sizeKb} KB` : ''}
+                  </Text>
+                </View>
+                <TouchableOpacity hitSlop={10} onPress={() => Alert.alert(h.title, 'Sharing the saved file is not wired up yet.')}>
+                  <Ionicons name="share-social-outline" size={22} color={colors.textMuted} />
+                </TouchableOpacity>
               </View>
-              <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                <Text style={[typography.bodyBold, { color: colors.text }]}>{h.title}</Text>
-                <Text style={[typography.caption, { color: colors.warning, fontWeight: '600', marginTop: 2 }]}>{propertyName} · {h.scope}</Text>
-                <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>Generated: {h.when} · {h.size}</Text>
-              </View>
-              <TouchableOpacity hitSlop={10} onPress={() => Alert.alert(h.title, 'Sharing the saved file is not wired up yet.')}>
-                <Ionicons name="share-social-outline" size={22} color={colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-          ))}
+            );
+          })}
         </ScrollView>
       )}
 
@@ -537,6 +618,7 @@ export default function AdminReportsScreen() {
                 <View style={styles.formFooter}>
                   <TouchableOpacity
                     style={styles.cancelBtn}
+                    disabled={saving}
                     onPress={() => {
                       setShowTimePicker(false);
                       setFormOpen(false);
@@ -544,8 +626,12 @@ export default function AdminReportsScreen() {
                   >
                     <Text style={[typography.button, { color: colors.text }]}>Cancel</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.saveBtn} onPress={saveSchedule}>
-                    <Text style={[typography.button, { color: colors.white }]}>Save</Text>
+                  <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} disabled={saving} onPress={saveSchedule}>
+                    {saving ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <Text style={[typography.button, { color: colors.white }]}>Save</Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </ScrollView>

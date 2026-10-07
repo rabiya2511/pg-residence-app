@@ -159,7 +159,13 @@ export default function AdminDashboardScreen() {
       color: colors.primary,
       onPress: () => navigation.navigate('AdminReports'),
     },
-     
+     {
+  label: 'Messages',
+  value: 'Open',
+  icon: 'chatbubbles-outline',
+  color: colors.primary,
+  onPress: () => navigation.navigate('AdminCommunications'),
+},
   ];
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
