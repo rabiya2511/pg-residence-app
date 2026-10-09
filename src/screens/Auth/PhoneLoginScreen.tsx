@@ -28,6 +28,9 @@ const DEMO_LOGINS = [
   { label: 'Demo Resident', phone: '99999 99999', icon: 'person-outline' },
 ] as const;
 
+// TEMPORARY: show demo logins in release builds. Set back to __DEV__ before sharing the app.
+const SHOW_DEMO_LOGINS = true; // normally: __DEV__
+
 export default function PhoneLoginScreen() {
   const navigation = useNavigation<any>();
   const { requestOtp, verifyOtp, loginWithGoogle, authError } = useMockAuth();
@@ -118,7 +121,7 @@ export default function PhoneLoginScreen() {
             </Text>
           </TouchableOpacity>
 
-          {__DEV__ && (
+          {SHOW_DEMO_LOGINS && (
             <View style={styles.demoBox}>
               <Text style={[typography.caption, styles.demoTitle]}>DEMO LOGINS (testing only)</Text>
               <View style={styles.demoRow}>
