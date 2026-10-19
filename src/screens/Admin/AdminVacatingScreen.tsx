@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
+  SectionList,
   TouchableOpacity,
   Modal,
   ScrollView,
@@ -22,6 +22,7 @@ import { AdminResident, Room, getEmergencyVacateDeductionPercent } from '../../c
 import { useAdmin } from '../../context/AdminContext';
 
 const MONTHS_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Parses "25 Sep 2026" (dd MMM yyyy) into a comparable timestamp
 function parseVacatingDate(str: string): number {
@@ -32,62 +33,72 @@ function parseVacatingDate(str: string): number {
   return new Date(Number(m[3]), monthIdx, Number(m[1])).getTime();
 }
 
-// A resident disappears from this screen once their vacating date arrives.
-// true  = hidden on the vacating day itself (leaving today = already gone)
-// false = stays visible through the vacating day, hidden the day after
-const HIDE_ON_VACATING_DAY = true;
-
-function hasNotYetVacated(dateStr: string): boolean {
-  const ts = parseVacatingDate(dateStr);
-  if (ts === Number.MAX_SAFE_INTEGER) return true; // unreadable date: keep it visible
+const startOfToday = () => {
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  return HIDE_ON_VACATING_DAY ? ts > todayStart : ts >= todayStart;
-}
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+};
 
 // Same format the rest of the app uses ("25 Sep 2026")
 function formatDisplayDate(date: Date): string {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+type VacateSection = { key: 'due' | 'upcoming'; title: string; data: AdminResident[] };
+
 function VacatingCard({
   resident,
+  isDue,
   isEarliest,
   rooms,
   propertyName,
   onCancel,
+  onCheckout,
 }: {
   resident: AdminResident;
+  isDue: boolean;
   isEarliest: boolean;
   rooms: Room[];
   propertyName: string;
   onCancel: () => void;
+  onCheckout: () => void;
 }) {
   const roomNumber = rooms.find((r) => r.id === resident.roomId)?.roomNumber ?? 'Unassigned';
   const deduction = resident.emergencyVacateDeductionPercent;
+  const highlighted = isEarliest || isDue;
+
+  // "Vacating today" / "Vacated 3 days ago"
+  let dueLabel = '';
+  if (isDue && resident.vacatingDate) {
+    const diff = Math.round((parseVacatingDate(resident.vacatingDate) - startOfToday()) / DAY_MS);
+    dueLabel = diff === 0 ? 'Vacating today' : `Vacated ${Math.abs(diff)} day${Math.abs(diff) === 1 ? '' : 's'} ago`;
+  }
 
   return (
-    <View style={[styles.card, isEarliest && styles.cardHighlighted]}>
+    <View style={[styles.card, highlighted && styles.cardHighlighted]}>
       <View style={styles.cardTop}>
-        <View style={[styles.avatarWrap, isEarliest && styles.avatarHighlighted]}>
-          <Ionicons name="exit-outline" size={20} color={isEarliest ? colors.white : colors.primary} />
+        <View style={[styles.avatarWrap, highlighted && styles.avatarHighlighted]}>
+          <Ionicons name="exit-outline" size={20} color={highlighted ? colors.white : colors.primary} />
         </View>
         <View style={styles.content}>
           <View style={styles.rowTop}>
             <Text style={[typography.bodyBold, { color: colors.text, flexShrink: 1 }]} numberOfLines={1}>
               {resident.name}
             </Text>
-            {isEarliest && (
+            {isDue ? (
+              <View style={styles.soonestBadge}>
+                <Text style={[typography.caption, { color: colors.white }]}>Due for checkout</Text>
+              </View>
+            ) : isEarliest ? (
               <View style={styles.soonestBadge}>
                 <Text style={[typography.caption, { color: colors.white }]}>Vacating Soonest</Text>
               </View>
-            )}
+            ) : null}
           </View>
           <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]} numberOfLines={1}>
             Room {roomNumber} · {propertyName}
           </Text>
-          <Text style={[typography.bodyBold, { color: isEarliest ? colors.error : colors.text, marginTop: spacing.xs }]}>
-            Vacating on {resident.vacatingDate}
+          <Text style={[typography.bodyBold, { color: highlighted ? colors.error : colors.text, marginTop: spacing.xs }]}>
+            {isDue ? `${dueLabel} · ${resident.vacatingDate}` : `Vacating on ${resident.vacatingDate}`}
           </Text>
           {deduction !== null && deduction !== undefined && (
             <Text style={[typography.caption, { color: colors.error, marginTop: 2 }]}>
@@ -102,18 +113,28 @@ function VacatingCard({
         </View>
       </View>
 
-      <TouchableOpacity style={styles.cancelButton} activeOpacity={0.85} onPress={onCancel}>
-        <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-        <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
-          Cancel Vacate
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.buttonRow}>
+        {isDue && (
+          <TouchableOpacity style={styles.checkoutButton} activeOpacity={0.85} onPress={onCheckout}>
+            <Ionicons name="checkmark-done-outline" size={16} color={colors.white} />
+            <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>
+              Complete Checkout
+            </Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity style={styles.cancelButton} activeOpacity={0.85} onPress={onCancel}>
+          <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+          <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
+            Cancel Vacate
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 export default function AdminVacatingScreen() {
-  const { residents, rooms, properties, submitVacateNotice } = useAdmin();
+  const { residents, rooms, properties, submitVacateNotice, archiveResident } = useAdmin();
 
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
@@ -128,9 +149,25 @@ export default function AdminVacatingScreen() {
 
   const getRoomNumber = (roomId: string) => rooms.find((r) => r.id === roomId)?.roomNumber ?? 'Unassigned';
 
-  const vacatingResidents = residents
-    .filter((r) => !!r.vacatingDate && hasNotYetVacated(r.vacatingDate))
-    .sort((a, b) => parseVacatingDate(a.vacatingDate!) - parseVacatingDate(b.vacatingDate!));
+  // Every resident with a vacating date is listed, the same rule the dashboard's Vacating count uses.
+  // Date today or earlier = due for checkout; later = upcoming.
+  const { dueList, upcomingList } = useMemo(() => {
+    const today = startOfToday();
+    const all = residents
+      .filter((r) => !!r.vacatingDate)
+      .sort((a, b) => parseVacatingDate(a.vacatingDate!) - parseVacatingDate(b.vacatingDate!));
+    return {
+      dueList: all.filter((r) => parseVacatingDate(r.vacatingDate!) <= today),
+      upcomingList: all.filter((r) => parseVacatingDate(r.vacatingDate!) > today),
+    };
+  }, [residents]);
+
+  const totalNotices = dueList.length + upcomingList.length;
+
+  const sections: VacateSection[] = [
+    { key: 'due' as const, title: 'Due for checkout', data: dueList },
+    { key: 'upcoming' as const, title: 'Upcoming', data: upcomingList },
+  ].filter((s) => s.data.length > 0);
 
   // Residents who have no vacate notice yet — the ones the admin can vacate.
   const availableResidents = useMemo(() => {
@@ -152,7 +189,7 @@ export default function AdminVacatingScreen() {
   const emergencyDeductionPreview = useMemo(() => {
     if (!isEmergency) return null;
     const now = new Date();
-    const daysNotice = Math.floor((vacateDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    const daysNotice = Math.floor((vacateDate.getTime() - now.getTime()) / DAY_MS);
     return getEmergencyVacateDeductionPercent(Math.max(0, daysNotice));
   }, [isEmergency, vacateDate]);
 
@@ -197,12 +234,31 @@ export default function AdminVacatingScreen() {
     );
   };
 
+  // Moves the resident to the archive: their bed is freed, their records are kept.
+  const handleCompleteCheckout = (resident: AdminResident) => {
+    Alert.alert(
+      'Complete Checkout',
+      `Move ${resident.name} to the archive? Their bed will be freed and their records are kept.`,
+      [
+        { text: 'Not Yet', style: 'cancel' },
+        {
+          text: 'Complete Checkout',
+          style: 'destructive',
+          onPress: () => archiveResident(resident.id, resident.vacateReason ?? 'Vacated'),
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.headerRow}>
         <View style={{ flex: 1 }}>
           <Text style={[typography.heading2, { color: colors.text }]}>Vacating</Text>
-          <Text style={[typography.body, { color: colors.textMuted }]}>{vacatingResidents.length} notice(s)</Text>
+          <Text style={[typography.body, { color: colors.textMuted }]}>
+            {totalNotices} notice(s)
+            {dueList.length > 0 ? ` · ${dueList.length} due for checkout` : ''}
+          </Text>
         </View>
         <TouchableOpacity style={styles.vacateButton} activeOpacity={0.85} onPress={openModal}>
           <Ionicons name="exit-outline" size={16} color={colors.white} />
@@ -212,23 +268,34 @@ export default function AdminVacatingScreen() {
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={vacatingResidents}
+      <SectionList
+        sections={sections}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        stickySectionHeadersEnabled={false}
         ListEmptyComponent={
           <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
             No vacate notices submitted yet.
           </Text>
         }
-        renderItem={({ item, index }) => (
+        renderSectionHeader={({ section }) => (
+          <View style={styles.sectionHeader}>
+            <Text style={[typography.bodyBold, { color: section.key === 'due' ? colors.error : colors.text }]}>
+              {section.title}
+            </Text>
+            <Text style={[typography.caption, { color: colors.textMuted }]}>{section.data.length}</Text>
+          </View>
+        )}
+        renderItem={({ item, index, section }) => (
           <VacatingCard
             resident={item}
-            isEarliest={index === 0}
+            isDue={section.key === 'due'}
+            isEarliest={section.key === 'upcoming' && index === 0}
             rooms={rooms}
             propertyName={getPropertyName(item.propertyId)}
             onCancel={() => handleCancelVacate(item)}
+            onCheckout={() => handleCompleteCheckout(item)}
           />
         )}
       />
@@ -366,6 +433,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   listContent: { paddingHorizontal: spacing.md, paddingBottom: spacing.xl },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -408,11 +482,25 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     marginLeft: spacing.xs,
   },
-  cancelButton: {
+  buttonRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  checkoutButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: spacing.sm,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.md,
+    backgroundColor: colors.success,
+  },
+  cancelButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: spacing.xs + 2,
     borderRadius: radius.md,
     borderWidth: 1,

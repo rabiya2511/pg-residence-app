@@ -1353,7 +1353,10 @@ export default function AdminAnalyticsScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <View style={{ flex: 1 }}>
+  <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
+    <Ionicons name="arrow-back" size={22} color={colors.text} />
+  </TouchableOpacity>
+  <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Text style={[typography.heading2, { color: colors.text }]}>Analytics & Insights</Text>
           <TouchableOpacity style={styles.propertyButton} activeOpacity={0.85} onPress={() => setPropertyModal(true)}>
             <Ionicons name="business-outline" size={14} color={colors.primary} />

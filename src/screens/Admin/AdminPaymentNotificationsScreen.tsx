@@ -52,17 +52,55 @@ function VacateNotificationCard({
   notification: AdminVacateNotification;
   onPress: () => void;
 }) {
+  const isReminder = !!notification.reminder;
+  const daysLeft = notification.daysLeft ?? 0;
+  const title = isReminder
+    ? daysLeft === 0
+      ? 'Vacating today'
+      : daysLeft === 1
+      ? 'Vacating tomorrow'
+      : `Vacating in ${daysLeft} days`
+    : null;
+
   return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={onPress}>
+    <TouchableOpacity
+      style={[styles.card, isReminder && styles.reminderCard]}
+      activeOpacity={0.8}
+      onPress={onPress}
+    >
       {!notification.read && <View style={styles.unreadDot} />}
-      <View style={[styles.iconWrap, { backgroundColor: '#FEE2E2' }]}>
-        <Ionicons name="exit-outline" size={20} color={colors.error} />
+      <View style={[styles.iconWrap, { backgroundColor: isReminder ? '#FFEDD5' : '#FEE2E2' }]}>
+        <Ionicons
+          name={isReminder ? 'alarm-outline' : 'exit-outline'}
+          size={20}
+          color={isReminder ? '#EA580C' : colors.error}
+        />
       </View>
       <View style={styles.content}>
-        <Text style={[typography.bodyBold, { color: colors.text }]}>{notification.residentName}</Text>
-        <Text style={[typography.caption, { color: colors.textMuted }]}>
-          Submitted a vacate notice — vacating on {notification.vacatingDate}
-        </Text>
+        <View style={styles.titleRow}>
+          <Text style={[typography.bodyBold, { color: colors.text, flexShrink: 1 }]} numberOfLines={1}>
+            {notification.residentName}
+          </Text>
+          {isReminder && (
+            <View style={[styles.badge, daysLeft === 0 && { backgroundColor: colors.error }]}>
+              <Text style={[typography.caption, { color: colors.white, fontWeight: '700' }]}>{title}</Text>
+            </View>
+          )}
+        </View>
+        {isReminder ? (
+          <>
+            <Text style={[typography.caption, { color: colors.textMuted }]}>
+              Reminder: {notification.message ?? `Vacating on ${notification.vacatingDate}`}
+            </Text>
+            {notification.isEmergency && (
+              <Text style={[typography.caption, { color: colors.error }]}>Emergency vacate</Text>
+            )}
+          </>
+        ) : (
+          <Text style={[typography.caption, { color: colors.textMuted }]}>
+            Submitted a vacate notice — vacating on {notification.vacatingDate}
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -160,6 +198,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  reminderCard: {
+    borderColor: '#FB923C',
+    backgroundColor: '#FFF7ED',
+  },
   unreadDot: {
     width: 8,
     height: 8,
@@ -177,4 +219,12 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
   },
   content: { flex: 1 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  badge: {
+    backgroundColor: '#EA580C',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    marginLeft: spacing.xs,
+  },
 });

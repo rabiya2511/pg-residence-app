@@ -5,6 +5,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as XLSX from 'xlsx';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
@@ -113,6 +115,7 @@ export default function AdminReportDetailScreen() {
     DATE_RANGE_OPTIONS.includes(range as DateRangeKey) ? (range as DateRangeKey) : 'This Month'
   );
   const [exporting, setExporting] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   const reportTitle = title ?? 'Report';
   const { start, end, label: rangeLabel } = getDateRangeBounds(dateRange);
@@ -548,6 +551,74 @@ export default function AdminReportDetailScreen() {
     }
   };
 
+  const handleDownloadExcel = async () => {
+    try {
+      setExportingExcel(true);
+
+      // "₹8500" becomes the number 8500 (shown as ₹8,500) so Excel can total the column.
+      // Plain numbers are converted only for the highlight values, never for phone numbers.
+      const toCell = (v: string, plainNumbers = false): any => {
+        const money = /^₹\s?([\d,]+(?:\.\d+)?)$/.exec(v);
+        if (money) return { v: Number(money[1].replace(/,/g, '')), t: 'n', z: '"₹"#,##0' };
+        if (plainNumbers && /^\d+$/.test(v)) return Number(v);
+        return v;
+      };
+
+      const aoa: any[][] = [
+        [reportTitle],
+        [`Generated ${new Date().toLocaleString('en-GB')} · ${rangeLabel} · ${report.pdfRows.length} record(s)`],
+        [],
+        ...report.kpis.map((k) => [k.label, toCell(k.value, true)]),
+        [],
+        report.columns,
+        ...report.pdfRows.map((row) => row.map((cell) => toCell(cell))),
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = report.columns.map((c, i) => ({
+        wch: Math.min(40, Math.max(c.length, ...report.pdfRows.map((r) => String(r[i] ?? '').length)) + 2),
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const sheetName = reportTitle.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Report';
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+
+      const safeName = reportTitle.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Report';
+      const stamp = new Date().toISOString().slice(0, 10);
+      const uri = `${FileSystem.cacheDirectory}${safeName}_${stamp}.xlsx`;
+      await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+
+      // Record the export in Audit History. A logging failure must not block the file.
+      if (propertyId) {
+        try {
+          await logReportHistory(propertyId, {
+            reportId,
+            title: reportTitle,
+            scope: `${dateRange} (${rangeLabel})`,
+            format: 'Excel',
+          });
+        } catch (e) {
+          console.warn('Could not log report export', e);
+        }
+      }
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          dialogTitle: reportTitle,
+          UTI: 'org.openxmlformats.spreadsheetml.sheet',
+        });
+      } else {
+        Alert.alert('Excel File Generated', `Saved to: ${uri}`);
+      }
+    } catch (err) {
+      Alert.alert('Export Failed', 'Could not generate the Excel file. Please try again.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
+
   // "Send now" from Scheduled Reports opens this screen and generates the PDF once.
   useEffect(() => {
     if (!autoExport) return;
@@ -619,14 +690,26 @@ export default function AdminReportDetailScreen() {
 
       <View style={styles.footer}>
         <TouchableOpacity
-          style={[styles.downloadButton, exporting && styles.downloadButtonDisabled]}
+          style={[styles.downloadButton, (exporting || exportingExcel) && styles.downloadButtonDisabled]}
           activeOpacity={0.85}
           onPress={handleDownloadPdf}
-          disabled={exporting}
+          disabled={exporting || exportingExcel}
         >
           <Ionicons name="document-text-outline" size={18} color={colors.white} />
           <Text style={[typography.button, { color: colors.white, marginLeft: spacing.xs }]}>
             {exporting ? 'Generating...' : 'Download PDF'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.excelButton, (exporting || exportingExcel) && styles.downloadButtonDisabled]}
+          activeOpacity={0.85}
+          onPress={handleDownloadExcel}
+          disabled={exporting || exportingExcel}
+        >
+          <Ionicons name="grid-outline" size={18} color={colors.white} />
+          <Text style={[typography.button, { color: colors.white, marginLeft: spacing.xs }]}>
+            {exportingExcel ? 'Generating...' : 'Download Excel'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -651,4 +734,5 @@ const styles = StyleSheet.create({
   footer: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.background },
   downloadButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.md },
   downloadButtonDisabled: { opacity: 0.6 },
+  excelButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.success, borderRadius: radius.md, paddingVertical: spacing.md, marginTop: spacing.sm },
 });

@@ -78,12 +78,12 @@ export default function AdminDashboardScreen() {
       color: colors.primary,
       onPress: () => navigation.navigate('Residents'),
     },
-    {
-      label: 'Pending Rent',
+      {
+      label: 'Pending Dues',
       value: pendingRent,
       icon: 'cash-outline',
       color: colors.warning,
-      onPress: () => navigation.navigate('Residents', { filterRentStatus: 'PendingOrOverdue' }),
+      onPress: () => navigation.navigate('AdminPendingDues'),
     },
     {
       label: 'Open Complaints',
@@ -134,13 +134,13 @@ export default function AdminDashboardScreen() {
       color: colors.success,
       onPress: () => navigation.navigate('AdminDayRevenue'),
     },
-    {
-      label: 'Smart Dialer',
-      value: adminResidents.length,
-      icon: 'call-outline',
-      color: colors.success,
-      onPress: () => navigation.navigate('AdminDialer'),
-    },
+  {
+  label: 'Analytics',
+  value: `${totalBeds === 0 ? 0 : Math.round((occupiedBeds / totalBeds) * 100)}%`,
+  icon: 'analytics-outline',
+  color: colors.primary,
+  onPress: () => navigation.navigate('AdminAnalytics'),
+},
 
     // ── 4th row: room allocation ──
     {

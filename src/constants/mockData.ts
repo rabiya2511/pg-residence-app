@@ -495,7 +495,7 @@ export type AdminResident = {
   occupationAddress?: string;
   nativePlace?: string;
   companyIdProofUri?: string | null;
-    guardianName?: string;
+  guardianName?: string;
   guardianPhone?: string;
   maintenanceFee?: number;
   advanceDepositStatus?: 'Paid' | 'Not Paid' | 'No Advance';
@@ -504,6 +504,12 @@ export type AdminResident = {
   vehicleType?: 'Bicycle' | 'Two-Wheeler' | 'Four-Wheeler';
   vehicleNumber?: string;
   vehicleModel?: string;
+  idDocType?: string;
+  idDocNumber?: string;
+  officeIdType?: string;
+  officeIdCode?: string;
+  officeIdUri?: string | null;
+  bedNumber?: number;
 };
 
 export const adminResidents: AdminResident[] = [

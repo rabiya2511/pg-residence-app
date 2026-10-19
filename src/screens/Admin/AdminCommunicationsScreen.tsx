@@ -174,6 +174,7 @@ export default function AdminCommunicationsScreen() {
 
   // ----- New Message compose state -----
   const [residentPickerVisible, setResidentPickerVisible] = useState(false);
+  const [residentSearch, setResidentSearch] = useState('');
   const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null);
   const [category, setCategory] = useState<MessageCategory>('Welcome');
   const [templatePickerVisible, setTemplatePickerVisible] = useState(false);
@@ -200,7 +201,20 @@ export default function AdminCommunicationsScreen() {
   const selectedResident = residents.find((r) => r.id === selectedResidentId);
   const property = properties[0];
 
+  const roomNumberOf = (roomId: string) => rooms.find((r) => r.id === roomId)?.roomNumber ?? '—';
+  const propertyNameOf = (propertyId: string) => properties.find((p) => p.id === propertyId)?.name ?? '—';
+
   const fail = (title: string, e: any) => Alert.alert(title, e?.message ?? 'Something went wrong. Please try again.');
+
+  const openResidentPicker = () => {
+    setResidentSearch('');
+    setResidentPickerVisible(true);
+  };
+
+  const closeResidentPicker = () => {
+    setResidentPickerVisible(false);
+    setResidentSearch('');
+  };
 
   const resetCompose = () => {
     setSelectedResidentId(null);
@@ -359,6 +373,28 @@ export default function AdminCommunicationsScreen() {
     [templates, templateCategoryFilter]
   );
 
+  // Residents shown in the picker: matches name, room, phone, property or email.
+  const filteredResidents = useMemo(() => {
+    const q = residentSearch.trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, '');
+    const rows = residents
+      .map((r: any) => ({
+        resident: r,
+        roomNumber: rooms.find((rm) => rm.id === r.roomId)?.roomNumber ?? '—',
+        propertyName: properties.find((p) => p.id === r.propertyId)?.name ?? '—',
+      }))
+      .sort((a, b) => String(a.resident.name).localeCompare(String(b.resident.name)));
+    if (!q) return rows;
+    return rows.filter(
+      ({ resident, roomNumber, propertyName }) =>
+        String(resident.name ?? '').toLowerCase().includes(q) ||
+        String(roomNumber).toLowerCase().includes(q) ||
+        String(propertyName).toLowerCase().includes(q) ||
+        String(resident.email ?? '').toLowerCase().includes(q) ||
+        (qDigits.length > 0 && String(resident.phone ?? '').replace(/\D/g, '').includes(qDigits))
+    );
+  }, [residents, rooms, properties, residentSearch]);
+
   const resolvedPreviewBody = selectedResidentId ? resolvePlaceholders(body, selectedResidentId) : body;
   const resolvedPreviewSubject = selectedResidentId ? resolvePlaceholders(subject, selectedResidentId) : subject;
 
@@ -465,15 +501,24 @@ export default function AdminCommunicationsScreen() {
       </View>
 
       <Text style={[typography.caption, styles.label, { marginTop: spacing.md }]}>Recipient Resident</Text>
-      <TouchableOpacity style={styles.selectField} onPress={() => setResidentPickerVisible(true)}>
-        <Ionicons name="person-outline" size={16} color={colors.primary} />
-        <Text style={[typography.body, { color: colors.text, marginLeft: spacing.sm, flex: 1 }]} numberOfLines={1}>
+      <TouchableOpacity style={styles.selectField} onPress={openResidentPicker}>
+        <Ionicons name="search" size={16} color={colors.primary} />
+        <Text
+          style={[typography.body, { color: selectedResident ? colors.text : colors.textMuted, marginLeft: spacing.sm, flex: 1 }]}
+          numberOfLines={1}
+        >
           {selectedResident
-            ? `${selectedResident.name} (${rooms.find((r) => r.id === selectedResident.roomId)?.roomNumber ?? '—'})`
-            : 'Select a resident'}
+            ? `${selectedResident.name} (${roomNumberOf(selectedResident.roomId)})`
+            : 'Search for a resident'}
         </Text>
         <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
       </TouchableOpacity>
+      {selectedResident && (
+        <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]} numberOfLines={1}>
+          Room {roomNumberOf(selectedResident.roomId)} · {propertyNameOf(selectedResident.propertyId)} ·{' '}
+          {selectedResident.phone || 'No phone on file'}
+        </Text>
+      )}
 
       <Text style={[typography.caption, styles.label, { marginTop: spacing.md }]}>Message Category</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xs }}>
@@ -750,32 +795,86 @@ export default function AdminCommunicationsScreen() {
         <DateTimePicker value={scheduleDate} mode={pickerStep} display="default" minimumDate={new Date()} onChange={onPickerChange} />
       )}
 
-      {/* Resident picker */}
-      <Modal visible={residentPickerVisible} transparent animationType="fade" onRequestClose={() => setResidentPickerVisible(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setResidentPickerVisible(false)}>
+      {/* Resident picker with search */}
+      <Modal visible={residentPickerVisible} transparent animationType="fade" onRequestClose={closeResidentPicker}>
+        <View style={[styles.modalOverlay, styles.pickerOverlay]}>
+          {/* Tapping outside the sheet closes the picker */}
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={closeResidentPicker} />
+
           <View style={styles.modalSheet}>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {residents.length === 0 && <Text style={[typography.caption, { color: colors.textMuted, padding: spacing.md }]}>No residents yet.</Text>}
-              {residents.map((r) => {
-                const room = rooms.find((rm) => rm.id === r.roomId);
+            <View style={styles.sheetHeader}>
+              <Text style={[typography.heading3, { color: colors.text }]}>Select Resident</Text>
+              <TouchableOpacity onPress={closeResidentPicker} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.pickerSearchRow}>
+              <Ionicons name="search" size={18} color={colors.textMuted} />
+              <TextInput
+                style={styles.pickerSearchInput}
+                value={residentSearch}
+                onChangeText={setResidentSearch}
+                placeholder="Search by name, room or phone"
+                placeholderTextColor={colors.textMuted}
+                autoFocus
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+              {residentSearch.length > 0 && (
+                <TouchableOpacity onPress={() => setResidentSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <Text style={[typography.caption, { color: colors.textMuted, paddingHorizontal: spacing.md, marginBottom: spacing.xs }]}>
+              {filteredResidents.length} resident{filteredResidents.length !== 1 ? 's' : ''}
+              {residentSearch.trim() ? ' found' : ''}
+            </Text>
+
+            <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {residents.length === 0 && (
+                <Text style={[typography.caption, { color: colors.textMuted, padding: spacing.md }]}>No residents yet.</Text>
+              )}
+              {residents.length > 0 && filteredResidents.length === 0 && (
+                <Text style={[typography.body, { color: colors.textMuted, padding: spacing.md, textAlign: 'center' }]}>
+                  No resident found for "{residentSearch.trim()}"
+                </Text>
+              )}
+              {filteredResidents.map(({ resident, roomNumber, propertyName }) => {
+                const selected = resident.id === selectedResidentId;
                 return (
                   <TouchableOpacity
-                    key={r.id}
-                    style={styles.modalOption}
+                    key={resident.id}
+                    style={[styles.residentRow, selected && styles.residentRowActive]}
+                    activeOpacity={0.8}
                     onPress={() => {
-                      setSelectedResidentId(r.id);
-                      setResidentPickerVisible(false);
+                      setSelectedResidentId(resident.id);
+                      closeResidentPicker();
                     }}
                   >
-                    <Text style={[typography.body, { color: colors.text }]}>
-                      {r.name} ({room?.roomNumber ?? '—'})
-                    </Text>
+                    <View style={styles.residentAvatar}>
+                      <Ionicons name="person" size={16} color={colors.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+                        {resident.name}
+                      </Text>
+                      <Text style={[typography.caption, { color: colors.textMuted, marginTop: 1 }]} numberOfLines={1}>
+                        Room {roomNumber} · {propertyName}
+                      </Text>
+                      <Text style={[typography.caption, { color: colors.textMuted, marginTop: 1 }]} numberOfLines={1}>
+                        {resident.phone || 'No phone on file'}
+                      </Text>
+                    </View>
+                    {selected && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
                   </TouchableOpacity>
                 );
               })}
             </ScrollView>
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* Template picker (for New Message) */}
@@ -941,4 +1040,38 @@ const styles = StyleSheet.create({
   modalSheet: { backgroundColor: colors.surface, borderRadius: radius.md, paddingVertical: spacing.sm },
   sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingTop: spacing.sm },
   modalOption: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+
+  // Resident picker with search
+  pickerOverlay: { justifyContent: 'flex-start', paddingTop: spacing.xl * 2 },
+  pickerSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  pickerSearchInput: { flex: 1, paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, color: colors.text, fontSize: 15 },
+  residentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  residentRowActive: { backgroundColor: colors.primaryLight },
+  residentAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.full,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
 });

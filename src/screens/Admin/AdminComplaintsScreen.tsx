@@ -1,6 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Alert,
+  Modal,
+  TextInput,
+  ScrollView,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useRoute } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
@@ -20,6 +31,19 @@ const nextStatus: Record<AdminComplaint['status'], AdminComplaint['status']> = {
   'In Progress': 'Resolved',
   Resolved: 'Open',
 };
+
+// Categories offered when an admin raises a complaint. Edit this list to match the
+// categories your residents see on their complaint screen.
+const COMPLAINT_CATEGORIES = [
+  'Plumbing',
+  'Electrical',
+  'Cleaning',
+  'Food',
+  'Internet / WiFi',
+  'Noise',
+  'Security',
+  'Other',
+];
 
 function ComplaintCard({
   complaint,
@@ -61,14 +85,62 @@ function ComplaintCard({
 export default function AdminComplaintsScreen() {
   const route = useRoute<any>();
   const filterStatus: AdminComplaint['status'] | undefined = route.params?.filterStatus;
-  const { complaints, updateComplaintStatus, markComplaintViewed } = useAdmin();
+  const { complaints, residents, rooms, updateComplaintStatus, markComplaintViewed, addComplaint } = useAdmin();
 
   const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [whatsappRecipients, setWhatsappRecipients] = useState<WhatsAppRecipient[]>([]);
 
-      const visibleComplaints = filterStatus
+  // ---- "Raise complaint" form ----
+  const [raiseOpen, setRaiseOpen] = useState(false);
+  const [residentSearch, setResidentSearch] = useState('');
+  const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null);
+  const [category, setCategory] = useState(COMPLAINT_CATEGORIES[0]);
+  const [description, setDescription] = useState('');
+
+  const visibleComplaints = filterStatus
     ? complaints.filter((c) => c.status === filterStatus)
     : complaints;
+
+  const roomNumberOf = (roomId: string) => rooms.find((r) => r.id === roomId)?.roomNumber ?? '-';
+
+  const filteredResidents = useMemo(() => {
+    const q = residentSearch.trim().toLowerCase();
+    return residents.filter(
+      (r) => !q || r.name.toLowerCase().includes(q) || roomNumberOf(r.roomId).toLowerCase().includes(q)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [residents, rooms, residentSearch]);
+
+  const openRaise = () => {
+    setResidentSearch('');
+    setSelectedResidentId(null);
+    setCategory(COMPLAINT_CATEGORIES[0]);
+    setDescription('');
+    setRaiseOpen(true);
+  };
+
+  const handleRaise = () => {
+    const resident = residents.find((r) => r.id === selectedResidentId);
+    if (!resident) {
+      Alert.alert('Select a Resident', 'Choose the resident this complaint is for.');
+      return;
+    }
+    if (!description.trim()) {
+      Alert.alert('Add Details', 'Please describe the complaint.');
+      return;
+    }
+    // Same function the residents use, so it lands in Open Complaints, the bell and the reports.
+    addComplaint({
+      residentName: resident.name,
+      room: roomNumberOf(resident.roomId),
+      category,
+      description: description.trim(),
+      residentId: resident.id,
+      propertyId: resident.propertyId,
+    });
+    setRaiseOpen(false);
+    Alert.alert('Complaint Raised', `Complaint added for ${resident.name}.`);
+  };
 
   const handleChangeStatus = (complaint: AdminComplaint) => {
     const newStatus = nextStatus[complaint.status];
@@ -101,12 +173,18 @@ export default function AdminComplaintsScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={[typography.heading2, { color: colors.text }]}>
-          {filterStatus ? `${filterStatus} Complaints` : 'Complaints'}
-        </Text>
-        <Text style={[typography.body, { color: colors.textMuted }]}>
-          {visibleComplaints.length} total
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={[typography.heading2, { color: colors.text }]}>
+            {filterStatus ? `${filterStatus} Complaints` : 'Complaints'}
+          </Text>
+          <Text style={[typography.body, { color: colors.textMuted }]}>
+            {visibleComplaints.length} total
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.raiseButton} activeOpacity={0.85} onPress={openRaise}>
+          <Ionicons name="add" size={18} color={colors.white} />
+          <Text style={[typography.button, { color: colors.white, marginLeft: 4 }]}>Raise</Text>
+        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -117,6 +195,11 @@ export default function AdminComplaintsScreen() {
         renderItem={({ item }) => (
           <ComplaintCard complaint={item} onChangeStatus={() => handleChangeStatus(item)} />
         )}
+        ListEmptyComponent={
+          <Text style={[typography.body, { color: colors.text, textAlign: 'center', marginTop: spacing.xl }]}>
+            No complaints here yet.
+          </Text>
+        }
       />
 
       <WhatsAppNotifyModal
@@ -125,6 +208,86 @@ export default function AdminComplaintsScreen() {
         title="Complaint Update"
         recipients={whatsappRecipients}
       />
+
+      {/* Raise a complaint on behalf of a resident */}
+      <Modal visible={raiseOpen} transparent animationType="fade" onRequestClose={() => setRaiseOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[typography.heading3, { color: colors.text, marginBottom: spacing.sm }]}>
+                Raise Complaint
+              </Text>
+
+              <Text style={styles.formLabel}>Resident *</Text>
+              <TextInput
+                style={styles.input}
+                value={residentSearch}
+                onChangeText={setResidentSearch}
+                placeholder="Search by name or room"
+                placeholderTextColor={colors.textMuted}
+              />
+              <View style={styles.residentList}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {filteredResidents.length === 0 && (
+                    <Text style={[typography.caption, { color: colors.textMuted, padding: spacing.sm }]}>
+                      {residents.length === 0 ? 'No residents yet.' : 'No resident matches your search.'}
+                    </Text>
+                  )}
+                  {filteredResidents.map((r) => {
+                    const selected = r.id === selectedResidentId;
+                    return (
+                      <TouchableOpacity
+                        key={r.id}
+                        style={[styles.residentRow, selected && styles.residentRowActive]}
+                        onPress={() => setSelectedResidentId(r.id)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[typography.body, { color: colors.text, flex: 1 }]} numberOfLines={1}>
+                          {r.name} · Room {roomNumberOf(r.roomId)}
+                        </Text>
+                        {selected && <Ionicons name="checkmark-circle" size={18} color={colors.primary} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              <Text style={styles.formLabel}>Category</Text>
+              <View style={styles.chipWrap}>
+                {COMPLAINT_CATEGORIES.map((c) => (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.chip, category === c && styles.chipActive]}
+                    onPress={() => setCategory(c)}
+                  >
+                    <Text style={[typography.caption, { color: category === c ? colors.white : colors.text }]}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.formLabel}>Details *</Text>
+              <TextInput
+                style={[styles.input, styles.multiline]}
+                value={description}
+                onChangeText={setDescription}
+                placeholder="Describe the issue..."
+                placeholderTextColor={colors.textMuted}
+                multiline
+                numberOfLines={4}
+              />
+
+              <View style={styles.formFooter}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setRaiseOpen(false)}>
+                  <Text style={[typography.button, { color: colors.text }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveBtn} onPress={handleRaise}>
+                  <Text style={[typography.button, { color: colors.white }]}>Raise Complaint</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -135,7 +298,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
     padding: spacing.md,
+  },
+  raiseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   listContent: {
     paddingHorizontal: spacing.md,
@@ -158,5 +331,98 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     borderRadius: radius.full,
+  },
+
+  // Raise-complaint form
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    maxHeight: '88%',
+  },
+  formLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textMuted,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  input: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 15,
+  },
+  multiline: {
+    minHeight: 90,
+    textAlignVertical: 'top',
+  },
+  residentList: {
+    maxHeight: 150,
+    marginTop: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+  },
+  residentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  residentRowActive: {
+    backgroundColor: colors.primaryLight,
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  chip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  chipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  formFooter: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  cancelBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.sm,
+  },
+  saveBtn: {
+    flex: 1.6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
   },
 });

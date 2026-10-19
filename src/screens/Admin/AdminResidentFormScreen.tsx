@@ -11,11 +11,14 @@ import {
   Platform,
   Modal,
   Switch,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
@@ -28,14 +31,14 @@ type VehicleType = 'Bicycle' | 'Two-Wheeler' | 'Four-Wheeler';
 
 const PAYMENT_METHODS = ['UPI', 'Cash', 'Card', 'Bank Transfer'];
 const VEHICLE_TYPES: VehicleType[] = ['Bicycle', 'Two-Wheeler', 'Four-Wheeler'];
+const GOV_ID_TYPES = ['Aadhar Card', 'PAN Card', 'Driving License', 'Passport', 'Voter ID'];
+const OFFICE_ID_TYPES = ['Office', 'College', 'School', 'Other'];
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// Parses "24 Sep 2026" (dd MMM yyyy — matches formatDate's own output) back
-// into a Date, so editing a resident pre-fills their real joining date
-// instead of silently resetting it to today.
+// Parses "24 Sep 2026" (dd MMM yyyy) back into a Date so editing keeps the real joining date.
 function parseDate(str: string): Date | null {
   const MONTHS_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const m = str.match(/^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\s+(\d{4})$/);
@@ -53,14 +56,39 @@ function ordinalDay(day: number): string {
   return `${String(day).padStart(2, '0')}${suffix}`;
 }
 
-// Accepts typed values like "12000", "12,000" or "₹12000" — anything that is
-// not a digit or decimal point is ignored, so the summary never falls to 0
-// just because of formatting.
 const toNum = (s: string) => {
   const n = parseFloat(String(s).replace(/[^0-9.]/g, ''));
   return isNaN(n) ? 0 : n;
 };
 const formatINR = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+
+// ---- image helpers: files via DocumentPicker (the system photo picker crashes on some emulators) ----
+async function pickImageFromFiles(onPicked: (uri: string) => void) {
+  try {
+    const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
+    if (!result.canceled && result.assets?.length) onPicked(result.assets[0].uri);
+  } catch {
+    Alert.alert('Unable to Open Files', 'Could not open the file browser on this device.');
+  }
+}
+
+async function takePhotoWithCamera(onPicked: (uri: string) => void, square = false) {
+  try {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission Needed', 'Please allow camera access.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      ...(square ? { allowsEditing: true, aspect: [1, 1] as [number, number] } : {}),
+    });
+    if (!result.canceled && result.assets?.length) onPicked(result.assets[0].uri);
+  } catch {
+    Alert.alert('Camera Unavailable', 'Could not open the camera on this device.');
+  }
+}
 
 function SelectField({
   label,
@@ -94,22 +122,11 @@ function SelectField({
         <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
       </TouchableOpacity>
 
-      <Modal
-        visible={modalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setModalVisible(false)}
-        >
+      <Modal visible={modalVisible} transparent animationType="fade" onRequestClose={() => setModalVisible(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModalVisible(false)}>
           <View style={styles.modalSheet}>
             {options.length === 0 ? (
-              <Text style={[typography.body, { color: colors.textMuted, padding: spacing.md }]}>
-                No options available
-              </Text>
+              <Text style={[typography.body, { color: colors.textMuted, padding: spacing.md }]}>No options available</Text>
             ) : (
               options.map((opt) => (
                 <TouchableOpacity
@@ -169,6 +186,51 @@ function SectionTitle({ icon, title }: { icon: keyof typeof Ionicons.glyphMap; t
   );
 }
 
+// One upload tile: shows the picked image (with a remove badge) or the Upload / Camera buttons.
+function UploadSlot({
+  tag,
+  uri,
+  onUpload,
+  onCamera,
+  onRemove,
+  style,
+}: {
+  tag: string;
+  uri: string | null;
+  onUpload: () => void;
+  onCamera: () => void;
+  onRemove: () => void;
+  style?: any;
+}) {
+  return (
+    <View style={[styles.uploadSlot, style]}>
+      <View style={styles.uploadTag}>
+        <Text style={[typography.caption, { color: colors.warning, fontWeight: '700', fontSize: 11 }]}>{tag}</Text>
+      </View>
+      {uri ? (
+        <View style={{ alignItems: 'center' }}>
+          <Image source={{ uri }} style={styles.uploadPreview} />
+          <TouchableOpacity style={styles.removeBadge} onPress={onRemove} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={14} color={colors.white} />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.uploadButtonsRow}>
+          <TouchableOpacity style={styles.uploadCircle} activeOpacity={0.8} onPress={onUpload}>
+            <Ionicons name="images-outline" size={22} color={colors.warning} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.uploadCircle} activeOpacity={0.8} onPress={onCamera}>
+            <Ionicons name="camera-outline" size={22} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+      )}
+      <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.xs }]}>
+        {uri ? 'Tap ✕ to replace' : 'Upload or Camera'}
+      </Text>
+    </View>
+  );
+}
+
 export default function AdminResidentFormScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -180,22 +242,21 @@ export default function AdminResidentFormScreen() {
     rooms,
     properties,
     dailyGuests,
+    identityDocuments,
+    setIdentityDocumentUri,
     transferResidentRoom,
   } = useAdmin();
 
   const residentId: string | undefined = route.params?.residentId;
   const isEdit = !!residentId;
   const existing = isEdit ? residents.find((r) => r.id === residentId) : undefined;
+  const existingDocs = existing ? identityDocuments.find((d) => d.residentId === existing.id) : undefined;
 
-  // The room to pre-derive `floor` from: either the resident being edited's
-  // current room, OR a room pre-selected via route.params (e.g. tapping
-  // "Add Resident" from a specific room's detail screen). Previously this
-  // only looked at `existing`, so adding via a pre-selected room left `floor`
-  // null — which then let the Floor picker silently wipe the pre-filled
-  // roomId if it was ever opened, causing "Missing Information" even though
-  // a room had already been chosen.
   const prefilledRoomId = existing?.roomId ?? route.params?.roomId;
   const prefilledRoom = prefilledRoomId ? rooms.find((r) => r.id === prefilledRoomId) : undefined;
+
+  // ---- Profile photo ----
+  const [profileUri, setProfileUri] = useState<string | null>(existing?.profileImageUri ?? null);
 
   // ---- Personal details ----
   const [name, setName] = useState(existing?.name ?? '');
@@ -205,10 +266,20 @@ export default function AdminResidentFormScreen() {
   const [guardianPhone, setGuardianPhone] = useState(existing?.guardianPhone ?? '');
   const [gender, setGender] = useState<AdminGender | null>(existing?.gender ?? null);
 
+  // ---- Identity & documents ----
+  const [idDocType, setIdDocType] = useState(existing?.idDocType ?? 'Aadhar Card');
+  const [idDocNumber, setIdDocNumber] = useState(existing?.idDocNumber ?? '');
+  const [idFrontUri, setIdFrontUri] = useState<string | null>(existingDocs?.frontUri ?? null);
+  const [idBackUri, setIdBackUri] = useState<string | null>(existingDocs?.backUri ?? null);
+  const [officeIdType, setOfficeIdType] = useState(existing?.officeIdType ?? 'Office');
+  const [officeIdCode, setOfficeIdCode] = useState(existing?.officeIdCode ?? '');
+  const [officeIdUri, setOfficeIdUri] = useState<string | null>(existing?.officeIdUri ?? null);
+
   // ---- Room ----
   const [propertyId, setPropertyId] = useState(existing?.propertyId ?? route.params?.propertyId ?? '');
   const [floor, setFloor] = useState<number | null>(prefilledRoom?.floor ?? null);
   const [roomId, setRoomId] = useState(existing?.roomId ?? route.params?.roomId ?? '');
+  const [bedNumber, setBedNumber] = useState<number | null>(existing?.bedNumber ?? null);
   const [joiningDate, setJoiningDate] = useState<Date>(
     existing ? parseDate(existing.joiningDate) ?? new Date() : new Date()
   );
@@ -226,8 +297,6 @@ export default function AdminResidentFormScreen() {
     existing?.maintenanceFee !== undefined ? String(existing.maintenanceFee) : ''
   );
   const [rentDueDay, setRentDueDay] = useState(existing ? String(existing.rentDueDay) : '5');
-  // Tracks whether the admin chose their own due day, so picking a joining
-  // date never overwrites a value they entered on purpose.
   const [dueDayEdited, setDueDayEdited] = useState(false);
   const [dayPickerVisible, setDayPickerVisible] = useState(false);
   const [payAmount, setPayAmount] = useState('');
@@ -254,23 +323,26 @@ export default function AdminResidentFormScreen() {
     ? rooms
         .filter((r) => r.propertyId === propertyId && r.floor === floor)
         .map((r) => {
-          const residentOccupants = residents.filter(
-            (res) => res.roomId === r.id && res.id !== existing?.id
-          ).length;
-          const activeGuestOccupants = dailyGuests.filter(
-            (g) => g.roomId === r.id && isDailyGuestActiveNow(g)
-          ).length;
+          const residentOccupants = residents.filter((res) => res.roomId === r.id && res.id !== existing?.id).length;
+          const activeGuestOccupants = dailyGuests.filter((g) => g.roomId === r.id && isDailyGuestActiveNow(g)).length;
           const occupants = residentOccupants + activeGuestOccupants;
           const remaining = r.capacity - occupants;
           return { ...r, occupants, remaining };
         })
     : [];
 
-  // ---- Payment summary (matches the Payment Summary & Calculations card) ----
-  // The "Payment Amount" follows the monthly rent until the admin types their own.
-  //   Bill Amount   = monthly rent + advance deposit (maintenance excluded)
-  //   Amount Paid   = first-month payment (if recorded) + deposit (if marked Paid)
-  //   Remaining Due = Bill Amount - Amount Paid (never below 0)
+  // ---- Bed picker: beds already taken by other residents in the chosen room ----
+  const takenBeds = new Set<number>(
+    residents
+      .filter((r) => r.roomId === roomId && r.id !== existing?.id && r.bedNumber !== undefined)
+      .map((r) => r.bedNumber as number)
+  );
+  const bedOptions = selectedRoom ? Array.from({ length: selectedRoom.capacity }, (_, i) => i + 1) : [];
+  const firstFreeBed = bedOptions.find((b) => !takenBeds.has(b)) ?? null;
+  const effectiveBed = bedNumber !== null && !takenBeds.has(bedNumber) ? bedNumber : firstFreeBed;
+  const selectedRoomAvailability = roomsWithAvailability.find((r) => r.id === roomId);
+
+  // ---- Payment summary ----
   const effectivePayAmount = payAmountEdited ? payAmount : monthlyRent;
   const rentNum = toNum(monthlyRent);
   const depositNum = depositStatus === 'No Advance' ? 0 : toNum(depositAmount);
@@ -284,20 +356,28 @@ export default function AdminResidentFormScreen() {
     setPropertyId(id);
     setFloor(null);
     setRoomId('');
+    setBedNumber(null);
   };
 
   const handleSelectFloor = (floorIdStr: string) => {
     const newFloor = Number(floorIdStr);
     setFloor(newFloor);
     const stillValid = rooms.find((r) => r.id === roomId && r.floor === newFloor);
-    if (!stillValid) setRoomId('');
+    if (!stillValid) {
+      setRoomId('');
+      setBedNumber(null);
+    }
+  };
+
+  const handleSelectRoom = (id: string) => {
+    setRoomId(id);
+    setBedNumber(null);
   };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(Platform.OS === 'ios');
     if (selectedDate) {
       setJoiningDate(selectedDate);
-      // New residents: due day follows the joining date, unless the admin chose their own
       if (!isEdit && !dueDayEdited) {
         setRentDueDay(String(selectedDate.getDate()));
       }
@@ -308,6 +388,18 @@ export default function AdminResidentFormScreen() {
     if (!name.trim() || !phone.trim() || !email.trim() || !gender || !propertyId || !roomId || !monthlyRent.trim()) {
       Alert.alert('Missing Information', 'Please fill in all required fields, including gender, room and monthly rent.');
       return;
+    }
+
+    // Government ID is required for a NEW resident (editing never forces re-uploads).
+    if (!isEdit) {
+      if (!idDocNumber.trim()) {
+        Alert.alert('Document Number Required', `Please enter the ${idDocType} number.`);
+        return;
+      }
+      if (!idFrontUri || !idBackUri) {
+        Alert.alert('Upload ID Proof', `Please upload both the front and back side of the ${idDocType}.`);
+        return;
+      }
     }
 
     const rentValue = toNum(monthlyRent);
@@ -362,6 +454,8 @@ export default function AdminResidentFormScreen() {
 
     const joiningDateStr = formatDate(joiningDate);
 
+    const hasOfficeId = !!(officeIdCode.trim() || officeIdUri);
+
     // Optional details — empty values are stored as undefined.
     const extras = {
       guardianName: guardianName.trim() || undefined,
@@ -372,6 +466,20 @@ export default function AdminResidentFormScreen() {
       vehicleType: vehicleType ?? undefined,
       vehicleNumber: vehicleType && vehicleNumber.trim() ? vehicleNumber.trim().toUpperCase() : undefined,
       vehicleModel: vehicleType && vehicleModel.trim() ? vehicleModel.trim() : undefined,
+      // new: photo + ID details
+      profileImageUri: profileUri,
+      idDocType,
+      idDocNumber: idDocNumber.trim() || undefined,
+      officeIdType: hasOfficeId ? officeIdType : undefined,
+      officeIdCode: officeIdCode.trim() || undefined,
+      officeIdUri: officeIdUri,
+      bedNumber: effectiveBed ?? undefined,
+    };
+
+    // Saves the government ID images into the Identity Documents list.
+    const saveGovIdImages = (id: string) => {
+      if (idFrontUri && idFrontUri !== existingDocs?.frontUri) setIdentityDocumentUri(id, 'front', idFrontUri);
+      if (idBackUri && idBackUri !== existingDocs?.backUri) setIdentityDocumentUri(id, 'back', idBackUri);
     };
 
     if (isEdit && existing) {
@@ -392,6 +500,7 @@ export default function AdminResidentFormScreen() {
         ...extras,
         ...(roomChanged ? {} : { propertyId, roomId }),
       });
+      saveGovIdImages(existing.id);
       Alert.alert('Resident Updated', 'Changes have been saved.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
@@ -417,8 +526,8 @@ export default function AdminResidentFormScreen() {
           : undefined,
       };
       const created = addResident(newResident);
+      saveGovIdImages(created.id);
 
-      // Record the first month's rent as paid, with the amount / method / reference from the form.
       if (firstMonthPaid) {
         recordRentPayment(created.id, payMethod, 'admin', {
           amount: payNum,
@@ -439,28 +548,58 @@ export default function AdminResidentFormScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[typography.heading3, { color: colors.text }]}>
-          {isEdit ? 'Edit Resident' : 'Add Resident'}
-        </Text>
+        <Text style={[typography.heading3, { color: colors.text }]}>{isEdit ? 'Edit Resident' : 'Add Resident'}</Text>
         <View style={{ width: 22 }} />
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {/* ---------------- Profile photo ---------------- */}
+          <View style={[styles.sectionCard, { alignItems: 'center' }]}>
+            <Text style={[typography.caption, { color: colors.warning, fontWeight: '700', letterSpacing: 0.5, marginBottom: spacing.md }]}>
+              RESIDENT PROFILE PHOTO
+            </Text>
+            <View style={styles.avatarRing}>
+              {profileUri ? (
+                <Image source={{ uri: profileUri }} style={styles.avatarImage} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={[typography.heading1, { color: colors.white }]}>
+                    {name.trim().charAt(0).toUpperCase() || '?'}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.photoButtonRow}>
+              <TouchableOpacity
+                style={[styles.photoButton, styles.photoButtonOutline]}
+                activeOpacity={0.85}
+                onPress={() => pickImageFromFiles(setProfileUri)}
+              >
+                <Ionicons name="images-outline" size={18} color={colors.warning} />
+                <Text style={[typography.caption, { color: colors.text, fontWeight: '700', marginLeft: 6 }]}>Upload Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.photoButton, styles.photoButtonFilled]}
+                activeOpacity={0.85}
+                onPress={() => takePhotoWithCamera(setProfileUri, true)}
+              >
+                <Ionicons name="camera" size={18} color={colors.white} />
+                <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>Take Photo</Text>
+              </TouchableOpacity>
+            </View>
+            {!!profileUri && (
+              <TouchableOpacity style={{ marginTop: spacing.sm }} onPress={() => setProfileUri(null)}>
+                <Text style={[typography.caption, { color: colors.error, fontWeight: '700' }]}>Remove photo</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
           <Field label="Full Name" value={name} onChangeText={setName} placeholder="e.g. Rahul Singh" />
           <Field label="Phone Number" value={phone} onChangeText={setPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" />
           <Field label="Email" value={email} onChangeText={setEmail} placeholder="e.g. rahul@example.com" keyboardType="email-address" />
 
-          <Field
-            label="Father / Guardian Name"
-            value={guardianName}
-            onChangeText={setGuardianName}
-            placeholder="e.g. Suresh Singh"
-          />
+          <Field label="Father / Guardian Name" value={guardianName} onChangeText={setGuardianName} placeholder="e.g. Suresh Singh" />
           <Field
             label="Father / Guardian Mobile No."
             value={guardianPhone}
@@ -482,6 +621,76 @@ export default function AdminResidentFormScreen() {
             ))}
           </View>
 
+          {/* ---------------- Identity & Documents ---------------- */}
+          <View style={styles.sectionCard}>
+            <SectionTitle icon="shield-checkmark" title="IDENTITY & DOCUMENTS" />
+
+            <Text style={styles.subSectionTitle}>1. GOVERNMENT ID PROOF{isEdit ? '' : ' *'}</Text>
+            <View style={styles.twoCol}>
+              <SelectField
+                label="Doc Type"
+                valueLabel={idDocType}
+                placeholder="Select"
+                options={GOV_ID_TYPES.map((t) => ({ id: t, label: t }))}
+                onSelect={setIdDocType}
+                containerStyle={styles.colField}
+              />
+              <Field
+                label="Document ID Number"
+                value={idDocNumber}
+                onChangeText={setIdDocNumber}
+                placeholder="Enter number"
+                autoCapitalize="characters"
+                containerStyle={styles.colField}
+              />
+            </View>
+            <View style={styles.twoCol}>
+              <UploadSlot
+                tag="FRONT SIDE"
+                uri={idFrontUri}
+                onUpload={() => pickImageFromFiles(setIdFrontUri)}
+                onCamera={() => takePhotoWithCamera(setIdFrontUri)}
+                onRemove={() => setIdFrontUri(null)}
+                style={styles.colField}
+              />
+              <UploadSlot
+                tag="BACK SIDE"
+                uri={idBackUri}
+                onUpload={() => pickImageFromFiles(setIdBackUri)}
+                onCamera={() => takePhotoWithCamera(setIdBackUri)}
+                onRemove={() => setIdBackUri(null)}
+                style={styles.colField}
+              />
+            </View>
+
+            <Text style={[styles.subSectionTitle, { marginTop: spacing.md }]}>2. OCCUPATION / INSTITUTION ID (OPTIONAL)</Text>
+            <View style={styles.twoCol}>
+              <SelectField
+                label="ID Type"
+                valueLabel={officeIdType}
+                placeholder="Select"
+                options={OFFICE_ID_TYPES.map((t) => ({ id: t, label: t }))}
+                onSelect={setOfficeIdType}
+                containerStyle={styles.colField}
+              />
+              <Field
+                label="ID / Employee Code"
+                value={officeIdCode}
+                onChangeText={setOfficeIdCode}
+                placeholder="Enter code"
+                autoCapitalize="characters"
+                containerStyle={styles.colField}
+              />
+            </View>
+            <UploadSlot
+              tag={`${officeIdType.toUpperCase()} ID CARD`}
+              uri={officeIdUri}
+              onUpload={() => pickImageFromFiles(setOfficeIdUri)}
+              onCamera={() => takePhotoWithCamera(setOfficeIdUri)}
+              onRemove={() => setOfficeIdUri(null)}
+            />
+          </View>
+
           <SelectField
             label="Property"
             valueLabel={selectedProperty?.name}
@@ -501,11 +710,7 @@ export default function AdminResidentFormScreen() {
 
           <SelectField
             label="Room"
-            valueLabel={
-              selectedRoom
-                ? `${selectedRoom.roomNumber} (${selectedRoom.capacity} Sharing)`
-                : undefined
-            }
+            valueLabel={selectedRoom ? `${selectedRoom.roomNumber} (${selectedRoom.capacity} Sharing)` : undefined}
             placeholder={floor !== null ? 'Select a room' : 'Select a floor first'}
             options={roomsWithAvailability
               .filter((r) => r.remaining > 0 || r.id === existing?.roomId)
@@ -513,19 +718,51 @@ export default function AdminResidentFormScreen() {
                 id: r.id,
                 label: `${r.roomNumber} — ${r.capacity} Sharing (${r.remaining} bed${r.remaining !== 1 ? 's' : ''} left)`,
               }))}
-            onSelect={setRoomId}
+            onSelect={handleSelectRoom}
             disabled={floor === null}
           />
 
+          {/* ---------------- Bed picker ---------------- */}
+          {selectedRoom && (
+            <View style={styles.bedCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View>
+                  <Text style={[typography.bodyBold, { color: colors.text }]}>Room {selectedRoom.roomNumber} Details</Text>
+                  <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                    {selectedRoom.capacity} Sharing · Floor {selectedRoom.floor}
+                  </Text>
+                </View>
+                <View style={styles.availableBadge}>
+                  <Text style={[typography.caption, { color: colors.success, fontWeight: '700' }]}>
+                    {selectedRoomAvailability?.remaining ?? 0} Available
+                  </Text>
+                </View>
+              </View>
+              <Text style={[typography.caption, styles.label, { marginTop: spacing.sm }]}>Assign Bed:</Text>
+              <View style={styles.toggleRow}>
+                {bedOptions.map((b) => {
+                  const taken = takenBeds.has(b);
+                  const active = effectiveBed === b;
+                  return (
+                    <TouchableOpacity
+                      key={b}
+                      disabled={taken}
+                      style={[styles.toggleButton, active && styles.toggleButtonActive, taken && { opacity: 0.4 }]}
+                      onPress={() => setBedNumber(b)}
+                    >
+                      <Text style={[typography.caption, { color: active ? colors.white : colors.text, fontWeight: '700' }]}>
+                        Bed {b}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
           <View style={styles.field}>
-            <Text style={[typography.caption, styles.label]}>
-              {isPreBooking ? 'Expected Joining Date' : 'Joining Date'}
-            </Text>
-            <TouchableOpacity
-              style={styles.dateInput}
-              activeOpacity={0.7}
-              onPress={() => setShowDatePicker(true)}
-            >
+            <Text style={[typography.caption, styles.label]}>{isPreBooking ? 'Expected Joining Date' : 'Joining Date'}</Text>
+            <TouchableOpacity style={styles.dateInput} activeOpacity={0.7} onPress={() => setShowDatePicker(true)}>
               <Text style={[typography.body, { color: colors.text }]}>{formatDate(joiningDate)}</Text>
               <Ionicons name="calendar-outline" size={20} color={colors.textMuted} />
             </TouchableOpacity>
@@ -561,23 +798,12 @@ export default function AdminResidentFormScreen() {
               </>
             )}
 
-            <Field
-              label="Monthly Rent (₹)"
-              value={monthlyRent}
-              onChangeText={setMonthlyRent}
-              placeholder="e.g. 12000"
-              keyboardType="numeric"
-            />
+            <Field label="Monthly Rent (₹)" value={monthlyRent} onChangeText={setMonthlyRent} placeholder="e.g. 12000" keyboardType="numeric" />
 
             <Text style={[typography.caption, styles.label]}>Advance Deposit</Text>
             <View style={styles.radioRow}>
               {(['Paid', 'Not Paid', 'No Advance'] as const).map((opt) => (
-                <TouchableOpacity
-                  key={opt}
-                  style={styles.radioItem}
-                  activeOpacity={0.8}
-                  onPress={() => setDepositStatus(opt)}
-                >
+                <TouchableOpacity key={opt} style={styles.radioItem} activeOpacity={0.8} onPress={() => setDepositStatus(opt)}>
                   <Ionicons
                     name={depositStatus === opt ? 'radio-button-on' : 'radio-button-off'}
                     size={22}
@@ -685,11 +911,7 @@ export default function AdminResidentFormScreen() {
 
           {/* ---------------- Vehicle details (optional) ---------------- */}
           <View style={styles.sectionCard}>
-            <TouchableOpacity
-              style={styles.vehicleHeader}
-              activeOpacity={0.8}
-              onPress={() => setVehicleOpen((prev) => !prev)}
-            >
+            <TouchableOpacity style={styles.vehicleHeader} activeOpacity={0.8} onPress={() => setVehicleOpen((prev) => !prev)}>
               <Ionicons name="bicycle-outline" size={22} color={colors.warning} />
               <Text style={[typography.bodyBold, { color: colors.text, flex: 1, marginLeft: spacing.sm, letterSpacing: 0.5 }]}>
                 VEHICLE DETAILS (OPTIONAL)
@@ -707,9 +929,7 @@ export default function AdminResidentFormScreen() {
                       style={[styles.toggleButton, vehicleType === v && styles.toggleButtonActive]}
                       onPress={() => setVehicleType(vehicleType === v ? null : v)}
                     >
-                      <Text
-                        style={[typography.caption, { color: vehicleType === v ? colors.white : colors.text, fontWeight: '600' }]}
-                      >
+                      <Text style={[typography.caption, { color: vehicleType === v ? colors.white : colors.text, fontWeight: '600' }]}>
                         {v}
                       </Text>
                     </TouchableOpacity>
@@ -753,12 +973,7 @@ export default function AdminResidentFormScreen() {
       </KeyboardAvoidingView>
 
       {/* Rent due day picker */}
-      <Modal
-        visible={dayPickerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDayPickerVisible(false)}
-      >
+      <Modal visible={dayPickerVisible} transparent animationType="fade" onRequestClose={() => setDayPickerVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setDayPickerVisible(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.modalSheet} onPress={() => {}}>
             <Text style={[typography.bodyBold, { color: colors.text, padding: spacing.md }]}>
@@ -777,9 +992,7 @@ export default function AdminResidentFormScreen() {
                       setDayPickerVisible(false);
                     }}
                   >
-                    <Text style={[typography.caption, { color: selected ? colors.white : colors.text, fontWeight: '700' }]}>
-                      {d}
-                    </Text>
+                    <Text style={[typography.caption, { color: selected ? colors.white : colors.text, fontWeight: '700' }]}>{d}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -825,10 +1038,7 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -836,20 +1046,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  backButton: {
-    padding: spacing.xs,
-  },
-  scrollContent: {
-    padding: spacing.md,
-    paddingBottom: spacing.xl,
-  },
-  field: {
-    marginBottom: spacing.md,
-  },
-  label: {
-    color: colors.textMuted,
-    marginBottom: spacing.xs,
-  },
+  backButton: { padding: spacing.xs },
+  scrollContent: { padding: spacing.md, paddingBottom: spacing.xl },
+  field: { marginBottom: spacing.md },
+  label: { color: colors.textMuted, marginBottom: spacing.xs },
   input: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -860,19 +1060,9 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
   },
-  selectInput: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  selectDisabled: {
-    opacity: 0.5,
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
+  selectInput: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  selectDisabled: { opacity: 0.5 },
+  toggleRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   toggleButton: {
     flex: 1,
     paddingVertical: spacing.sm,
@@ -882,10 +1072,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     alignItems: 'center',
   },
-  toggleButtonActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
+  toggleButtonActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   dateInput: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -905,11 +1092,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.md,
   },
-  sectionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   subSectionTitle: {
     fontSize: 12,
     fontWeight: '700',
@@ -917,6 +1100,93 @@ const styles = StyleSheet.create({
     color: colors.warning,
     marginTop: spacing.xs,
     marginBottom: spacing.sm,
+  },
+  // profile photo
+  avatarRing: {
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    borderWidth: 3,
+    borderColor: colors.warning,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+  },
+  avatarImage: { width: 98, height: 98, borderRadius: 49 },
+  avatarFallback: {
+    width: 98,
+    height: 98,
+    borderRadius: 49,
+    backgroundColor: colors.warning,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoButtonRow: { flexDirection: 'row', gap: spacing.sm },
+  photoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  photoButtonOutline: { borderWidth: 1, borderColor: colors.warning, backgroundColor: colors.background },
+  photoButtonFilled: { backgroundColor: colors.primary },
+  // document upload slots
+  uploadSlot: {
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  uploadTag: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.warning,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    marginBottom: spacing.sm,
+  },
+  uploadButtonsRow: { flexDirection: 'row', gap: spacing.sm },
+  uploadCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadPreview: { width: '100%', height: 90, borderRadius: radius.sm },
+  removeBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // bed picker
+  bedCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  availableBadge: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.full,
   },
   switchCard: {
     flexDirection: 'row',
@@ -928,27 +1198,11 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  radioRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-  },
-  radioItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  twoCol: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  colField: {
-    flex: 1,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
+  radioRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },
+  radioItem: { flexDirection: 'row', alignItems: 'center' },
+  twoCol: { flexDirection: 'row', gap: spacing.sm },
+  colField: { flex: 1 },
+  summaryRow: { flexDirection: 'row', gap: spacing.xs },
   summaryTile: {
     flex: 1,
     alignItems: 'center',
@@ -968,15 +1222,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 4,
   },
-  vehicleHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  footerRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
+  vehicleHeader: { flexDirection: 'row', alignItems: 'center' },
+  footerRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   cancelButton: {
     flex: 1,
     borderRadius: radius.md,
@@ -996,46 +1243,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: spacing.lg,
-  },
-  modalSheet: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    paddingVertical: spacing.sm,
-    maxHeight: 420,
-  },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.lg },
+  modalSheet: { backgroundColor: colors.surface, borderRadius: radius.md, paddingVertical: spacing.sm, maxHeight: 420 },
   modalOption: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  dayGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: spacing.sm,
-    paddingBottom: spacing.sm,
-  },
-  dayCell: {
-    width: '14.28%',
-    aspectRatio: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.full,
-  },
-  dayCellActive: {
-    backgroundColor: colors.primary,
-  },
-  transferNotice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    marginBottom: spacing.md,
-  },
+  dayGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.sm, paddingBottom: spacing.sm },
+  dayCell: { width: '14.28%', aspectRatio: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radius.full },
+  dayCellActive: { backgroundColor: colors.primary },
 });

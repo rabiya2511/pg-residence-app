@@ -23,10 +23,11 @@ import AdminRoomFormScreen from '../screens/Admin/AdminRoomFormScreen';
 import AdminDayRevenueScreen from '../screens/Admin/AdminDayRevenueScreen';
 import AdminDayRevenueDetailScreen from '../screens/Admin/AdminDayRevenueDetailScreen';
 import AdminRoomsScreen from '../screens/Admin/RoomManagementScreen';
-import AdminDialerScreen from '../screens/Admin/AdminDialerScreen';
 import AdminReportsScreen from '../screens/Admin/AdminReportsScreen';
 import AdminReportDetailScreen from '../screens/Admin/AdminReportsDetailsScreen';
 import AdminCommunicationsScreen from '../screens/Admin/AdminCommunicationsScreen';
+import AdminPendingDuesScreen from '../screens/Admin/AdminPendingDuesScreen';
+import AdminAnalyticsScreen from '../screens/Admin/AdminAnalyticsScreen';
 
 const Stack = createNativeStackNavigator();
 export default function AdminStackNavigator() {
@@ -55,11 +56,11 @@ export default function AdminStackNavigator() {
       <Stack.Screen name="AdminDayRevenue" component={AdminDayRevenueScreen} />
       <Stack.Screen name="AdminDayRevenueDetail" component={AdminDayRevenueDetailScreen} />
       <Stack.Screen name="AdminRooms" component={AdminRoomsScreen} />
-      <Stack.Screen name="AdminDialer" component={AdminDialerScreen} />
       <Stack.Screen name="AdminReports" component={AdminReportsScreen} />
       <Stack.Screen name="AdminReportDetail" component={AdminReportDetailScreen} />
       <Stack.Screen name="AdminCommunications" component={AdminCommunicationsScreen} />
-      
+      <Stack.Screen name="AdminPendingDues" component={AdminPendingDuesScreen} />
+      <Stack.Screen name="AdminAnalytics" component={AdminAnalyticsScreen} />
     </Stack.Navigator>
   );
 }

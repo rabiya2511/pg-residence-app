@@ -20,9 +20,13 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { AdminResident, Room, Property } from '../../constants/mockData';
+import { AdminResident, Room, Property, MONTHLY_RENT_BY_CAPACITY } from '../../constants/mockData';
 import { useAdmin, isDailyGuestActiveNow, ArchivedResident } from '../../context/AdminContext';
 import { exportResidentsToExcel } from '../../services/exportResidentsToExcel';
+
+const WHATSAPP_GREEN = '#25D366';
+const AVATAR_ORANGE = '#F59E0B';
+const MONTHS_3 = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 const statusColors: Record<string, { bg: string; text: string }> = {
   Paid: { bg: '#D1FAE5', text: colors.success },
@@ -30,35 +34,106 @@ const statusColors: Record<string, { bg: string; text: string }> = {
   Overdue: { bg: '#FEE2E2', text: colors.error },
 };
 
-function getRoomNumber(rooms: Room[], roomId: string): string {
-  return rooms.find((r) => r.id === roomId)?.roomNumber ?? 'Unassigned';
+type ViewMode = 'list' | 'rooms';
+type Filter = 'active' | 'all' | 'archived' | 'male' | 'female' | 'vacating' | 'due';
+type Entry = { resident: AdminResident | ArchivedResident; archived: boolean };
+
+type Occupant = {
+  key: string;
+  kind: 'resident' | 'guest';
+  name: string;
+  phone: string;
+  resident?: AdminResident;
+};
+
+// ───────────────────────── helpers ─────────────────────────
+
+const getRoom = (rooms: Room[], roomId: string) => rooms.find((r) => r.id === roomId);
+const getRoomNumber = (rooms: Room[], roomId: string) => getRoom(rooms, roomId)?.roomNumber ?? 'Unassigned';
+const getPropertyName = (properties: Property[], propertyId: string) =>
+  properties.find((p) => p.id === propertyId)?.name ?? 'Unknown Property';
+
+const initialOf = (name: string) => (name?.trim().charAt(0) || '?').toUpperCase();
+
+const isGender = (r: AdminResident, g: 'male' | 'female') => String((r as any).gender ?? '').toLowerCase() === g;
+
+function parseDisplayDate(str: string | null | undefined): number {
+  if (!str) return Number.MAX_SAFE_INTEGER;
+  const m = str.trim().match(/^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*,?\s+(\d{4})$/);
+  if (!m) return Number.MAX_SAFE_INTEGER;
+  const idx = MONTHS_3.indexOf(m[2].toLowerCase());
+  return idx === -1 ? Number.MAX_SAFE_INTEGER : new Date(Number(m[3]), idx, Number(m[1])).getTime();
 }
 
-function getPropertyName(properties: Property[], propertyId: string): string {
-  return properties.find((p) => p.id === propertyId)?.name ?? 'Unknown Property';
+function waDigits(phone: string): string {
+  let d = (phone ?? '').replace(/[^\d]/g, '');
+  if (d.length === 10) d = `91${d}`; // 10-digit Indian numbers
+  return d;
 }
 
 function handleCall(phone: string) {
-  const cleaned = phone.replace(/\s/g, '');
-  Linking.openURL(`tel:${cleaned}`).catch(() => {
+  Linking.openURL(`tel:${(phone ?? '').replace(/\s/g, '')}`).catch(() => {
     Alert.alert('Unable to Call', 'Could not open the dialer.');
   });
 }
 
-function handleWhatsAppReminder(resident: AdminResident, roomNumber: string) {
-  const cleaned = resident.phone.replace(/[^\d]/g, '');
-  const message = `Hi ${resident.name}, this is a reminder that your rent of ₹${resident.monthlyRent} (Room ${roomNumber}) is currently ${resident.rentStatus}. Please make the payment at your earliest convenience. — Lokansh Aditya PG Residency`;
-  const url = `https://wa.me/${cleaned}?text=${encodeURIComponent(message)}`;
+function handleWhatsApp(phone: string, text?: string) {
+  const url = `https://wa.me/${waDigits(phone)}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   Linking.openURL(url).catch(() => {
     Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.');
   });
 }
 
-function handleWhatsAppChat(phone: string) {
-  const cleaned = phone.replace(/[^\d]/g, '');
-  Linking.openURL(`https://wa.me/${cleaned}`).catch(() => {
-    Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.');
+// A reminder when rent is due, a plain chat otherwise.
+function messageResident(resident: AdminResident, roomNumber: string, properties: Property[]) {
+  if (resident.rentStatus !== 'Paid') {
+    const pg = getPropertyName(properties, resident.propertyId);
+    handleWhatsApp(
+      resident.phone,
+      `Hi ${resident.name}, this is a reminder that your rent of ₹${resident.monthlyRent} (Room ${roomNumber}) is currently ${resident.rentStatus}. Please make the payment at your earliest convenience. — ${pg}`
+    );
+  } else {
+    handleWhatsApp(resident.phone);
+  }
+}
+
+// Places occupants into numbered beds. A stored bedNumber is honoured when there is one,
+// everyone else fills the remaining beds in order of joining date.
+function buildBeds(occupants: Occupant[], capacity: number): (Occupant | null)[] {
+  const ordered = [...occupants].sort(
+    (a, b) => parseDisplayDate(a.resident?.joiningDate) - parseDisplayDate(b.resident?.joiningDate)
+  );
+  const beds: (Occupant | null)[] = Array(Math.max(capacity, 0)).fill(null);
+  const placed = new Set<string>();
+
+  ordered.forEach((o) => {
+    const n = Number((o.resident as any)?.bedNumber);
+    if (n >= 1 && n <= beds.length && !beds[n - 1]) {
+      beds[n - 1] = o;
+      placed.add(o.key);
+    }
   });
+  ordered.forEach((o) => {
+    if (placed.has(o.key)) return;
+    const i = beds.findIndex((b) => !b);
+    if (i >= 0) beds[i] = o;
+    else beds.push(o); // more people than beds
+  });
+  return beds;
+}
+
+// ───────────────────────── list cards ─────────────────────────
+
+function Avatar({ name, uri, muted }: { name: string; uri?: string | null; muted?: boolean }) {
+  return (
+    <View style={[styles.avatar, muted && { backgroundColor: colors.textMuted }]}>
+      {uri ? (
+        <Image source={{ uri }} style={styles.avatarImage} />
+      ) : (
+        <Text style={[typography.bodyBold, { color: colors.white }]}>{initialOf(name)}</Text>
+      )}
+    </View>
+  );
 }
 
 function ResidentCard({
@@ -66,70 +141,46 @@ function ResidentCard({
   rooms,
   properties,
   onPress,
-  onEdit,
-  onDelete,
+  onMenu,
 }: {
   resident: AdminResident;
   rooms: Room[];
   properties: Property[];
   onPress: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  onMenu: () => void;
 }) {
-  const statusStyle = statusColors[resident.rentStatus];
-  const hasDues = resident.rentStatus !== 'Paid';
-  const roomNumber = getRoomNumber(rooms, resident.roomId);
-  const propertyName = getPropertyName(properties, resident.propertyId);
-  // Green when rent is Paid, red for Pending or Overdue — mirrors the same
-  // rentStatus badge already shown next to the name.
-  const nameColor = resident.rentStatus === 'Paid' ? colors.success : colors.error;
+  const room = getRoom(rooms, resident.roomId);
+  const roomNumber = room?.roomNumber ?? 'Unassigned';
+  const rent = statusColors[resident.rentStatus] ?? statusColors.Pending;
+  const vacating = !!resident.vacatingDate;
 
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={onPress}>
-      <View style={styles.avatarWrap}>
-        {resident.profileImageUri ? (
-          <Image source={{ uri: resident.profileImageUri }} style={styles.avatarImage} />
-        ) : (
-          <Ionicons name="person" size={22} color={colors.primary} />
-        )}
-      </View>
-      <View style={styles.content}>
-        <View style={styles.cardHeaderRow}>
-          <Text style={[typography.bodyBold, { color: nameColor }]}>{resident.name}</Text>
-          <View style={[styles.badge, { backgroundColor: statusStyle.bg }]}>
-            <Text style={[typography.caption, { color: statusStyle.text }]}>
-              {resident.rentStatus}
-            </Text>
-          </View>
-        </View>
-        <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]} numberOfLines={1}>
-          Room {roomNumber} · {propertyName}
+      <Avatar name={resident.name} uri={resident.profileImageUri} />
+      <View style={styles.cardBody}>
+        <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+          {resident.name}
         </Text>
-        <View style={styles.phoneRow}>
-          <Text style={[typography.caption, { color: colors.textMuted }]}>{resident.phone}</Text>
-          {hasDues && (
-            <View style={styles.phoneActions}>
-              <TouchableOpacity
-                style={styles.phoneActionButton}
-                onPress={() => handleCall(resident.phone)}
-              >
-                <Ionicons name="call-outline" size={16} color={colors.primary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.phoneActionButton}
-                onPress={() => handleWhatsAppReminder(resident, roomNumber)}
-              >
-                <Ionicons name="logo-whatsapp" size={16} color={colors.success} />
-              </TouchableOpacity>
-            </View>
-          )}
+        <View style={styles.metaRow}>
+          <View style={styles.roomTag}>
+            <Text style={styles.roomTagText}>{room ? `R${roomNumber}` : 'N/A'}</Text>
+          </View>
+          <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+            {room ? `${room.capacity} Sharing` : 'No room'} · {vacating ? `Vacating ${resident.vacatingDate}` : 'Active'}
+          </Text>
+        </View>
+        <View style={[styles.rentPill, { backgroundColor: rent.bg }]}>
+          <Text style={[typography.caption, { color: rent.text, fontWeight: '700' }]}>Rent {resident.rentStatus}</Text>
         </View>
       </View>
-      <TouchableOpacity style={styles.rowIconButton} onPress={onEdit}>
-        <Ionicons name="create-outline" size={20} color={colors.textMuted} />
+      <TouchableOpacity style={styles.roundIcon} onPress={() => handleCall(resident.phone)}>
+        <Ionicons name="call" size={18} color={colors.primary} />
       </TouchableOpacity>
-      <TouchableOpacity style={styles.rowIconButton} onPress={onDelete}>
-        <Ionicons name="trash-outline" size={20} color={colors.error} />
+      <TouchableOpacity style={styles.roundIcon} onPress={() => messageResident(resident, roomNumber, properties)}>
+        <Ionicons name="chatbox-ellipses-outline" size={19} color={WHATSAPP_GREEN} />
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.roundIcon} onPress={onMenu} hitSlop={8}>
+        <Ionicons name="ellipsis-vertical" size={18} color={colors.textMuted} />
       </TouchableOpacity>
     </TouchableOpacity>
   );
@@ -149,59 +200,156 @@ function ArchivedResidentCard({
   onDeletePermanently: () => void;
 }) {
   const roomNumber = getRoomNumber(rooms, resident.roomId);
-  const propertyName = getPropertyName(properties, resident.propertyId);
 
   return (
     <View style={styles.archivedCard}>
       <View style={styles.archivedTop}>
-        <View style={styles.avatarWrap}>
-          {resident.profileImageUri ? (
-            <Image source={{ uri: resident.profileImageUri }} style={styles.avatarImage} />
-          ) : (
-            <Ionicons name="person" size={22} color={colors.textMuted} />
-          )}
-        </View>
-        <View style={styles.content}>
-          <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
-          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]} numberOfLines={1}>
-            Last room: {roomNumber} · {propertyName}
+        <Avatar name={resident.name} uri={resident.profileImageUri} muted />
+        <View style={styles.cardBody}>
+          <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+            {resident.name}
           </Text>
-          <Text style={[typography.caption, { color: colors.textMuted }]}>
-            Archived on {resident.archivedOn}
+          <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+            Last room: {roomNumber} · {getPropertyName(properties, resident.propertyId)}
           </Text>
-          <View style={styles.phoneRow}>
-            <Text style={[typography.caption, { color: colors.textMuted }]}>{resident.phone}</Text>
-            <View style={styles.phoneActions}>
-              <TouchableOpacity style={styles.phoneActionButton} onPress={() => handleCall(resident.phone)}>
-                <Ionicons name="call-outline" size={16} color={colors.primary} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.phoneActionButton} onPress={() => handleWhatsAppChat(resident.phone)}>
-                <Ionicons name="logo-whatsapp" size={16} color={colors.success} />
-              </TouchableOpacity>
-            </View>
-          </View>
+          <Text style={[typography.caption, { color: colors.textMuted }]}>Archived on {resident.archivedOn}</Text>
         </View>
+        <TouchableOpacity style={styles.roundIcon} onPress={() => handleCall(resident.phone)}>
+          <Ionicons name="call" size={18} color={colors.primary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.roundIcon} onPress={() => handleWhatsApp(resident.phone)}>
+          <Ionicons name="chatbox-ellipses-outline" size={19} color={WHATSAPP_GREEN} />
+        </TouchableOpacity>
       </View>
-
       <View style={styles.archivedActions}>
         <TouchableOpacity style={[styles.archivedButton, styles.restoreButton]} activeOpacity={0.85} onPress={onRestore}>
           <Ionicons name="refresh-outline" size={16} color={colors.white} />
           <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>Restore</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.archivedButton, styles.permDeleteButton]}
-          activeOpacity={0.85}
-          onPress={onDeletePermanently}
-        >
+        <TouchableOpacity style={[styles.archivedButton, styles.permDeleteButton]} activeOpacity={0.85} onPress={onDeletePermanently}>
           <Ionicons name="trash-outline" size={16} color={colors.error} />
-          <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
-            Delete Permanently
-          </Text>
+          <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>Delete Permanently</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
+
+// ───────────────────────── room-wise card ─────────────────────────
+
+type RoomCardData = {
+  room: Room;
+  propertyName: string;
+  rentPerBed: number | null;
+  beds: (Occupant | null)[];
+  occupied: number;
+};
+
+function RoomCard({
+  data,
+  showProperty,
+  properties,
+  onOpenResident,
+  onAllot,
+}: {
+  data: RoomCardData;
+  showProperty: boolean;
+  properties: Property[];
+  onOpenResident: (id: string) => void;
+  onAllot: (room: Room) => void;
+}) {
+  const { room, beds, occupied, rentPerBed, propertyName } = data;
+  const vacant = Math.max(0, room.capacity - occupied);
+  const allVacant = occupied === 0;
+
+  return (
+    <View style={styles.roomCard}>
+      <View style={styles.roomHeader}>
+        <View style={styles.roomBadge}>
+          <Text style={styles.roomBadgeText}>ROOM {room.roomNumber}</Text>
+        </View>
+        <View style={{ flex: 1, marginLeft: spacing.sm }}>
+          <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+            Floor {room.floor} · {room.capacity} Sharing
+          </Text>
+          <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+            {rentPerBed != null ? `₹${rentPerBed.toLocaleString()} / bed` : 'Rent not set'}
+            {showProperty ? ` · ${propertyName}` : ''}
+          </Text>
+        </View>
+        <View style={[styles.vacancyPill, vacant === 0 && styles.fullPill]}>
+          <Text style={[typography.caption, { color: vacant === 0 ? colors.success : '#B45309', fontWeight: '700' }]}>
+            {vacant === 0 ? 'Full' : `${vacant} Bed${vacant === 1 ? '' : 's'} Vacant`}
+          </Text>
+        </View>
+      </View>
+
+      <Text style={styles.sectionLabel}>
+        ASSIGNED RESIDENTS & BEDS ({occupied}/{room.capacity})
+      </Text>
+
+      {allVacant ? (
+        <View style={styles.allVacantRow}>
+          <Text style={[typography.body, { color: colors.textMuted, flex: 1 }]}>
+            All {room.capacity} beds currently vacant
+          </Text>
+          <TouchableOpacity onPress={() => onAllot(room)}>
+            <Text style={[typography.bodyBold, { color: colors.primary }]}>+ Allot Room</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        beds.map((bed, i) =>
+          bed ? (
+            <TouchableOpacity
+              key={bed.key}
+              style={styles.bedRow}
+              activeOpacity={bed.resident ? 0.8 : 1}
+              onPress={() => bed.resident && onOpenResident(bed.resident.id)}
+            >
+              <View style={styles.bedTag}>
+                <Text style={styles.bedTagText}>Bed {i + 1}</Text>
+              </View>
+              <Avatar name={bed.name} uri={bed.resident?.profileImageUri} />
+              <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+                  {bed.name}
+                  {bed.kind === 'guest' ? '  · Day Guest' : ''}
+                </Text>
+                <Text style={[typography.caption, { color: colors.textMuted }]}>{bed.phone}</Text>
+              </View>
+              <TouchableOpacity style={styles.smallIcon} onPress={() => handleCall(bed.phone)}>
+                <Ionicons name="call" size={17} color={colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.smallIcon}
+                onPress={() =>
+                  bed.resident
+                    ? messageResident(bed.resident, room.roomNumber, properties)
+                    : handleWhatsApp(bed.phone)
+                }
+              >
+                <Ionicons name="chatbox-ellipses-outline" size={18} color={WHATSAPP_GREEN} />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          ) : (
+            <View key={`vacant_${i}`} style={styles.vacantRow}>
+              <View style={[styles.bedTag, styles.bedTagVacant]}>
+                <Text style={[styles.bedTagText, { color: colors.success }]}>Bed {i + 1}</Text>
+              </View>
+              <Text style={[typography.bodyBold, { color: colors.success, flex: 1 }]}>✨ Vacant Bed Available</Text>
+              <TouchableOpacity style={styles.allotButton} onPress={() => onAllot(room)}>
+                <Ionicons name="person-add-outline" size={16} color={colors.success} />
+                <Text style={[typography.caption, { color: colors.success, fontWeight: '700', marginLeft: 4 }]}>Allot</Text>
+              </TouchableOpacity>
+            </View>
+          )
+        )
+      )}
+    </View>
+  );
+}
+
+// ───────────────────────── screen ─────────────────────────
 
 export default function AdminResidentsScreen() {
   const navigation = useNavigation<any>();
@@ -217,23 +365,141 @@ export default function AdminResidentsScreen() {
     properties,
     dailyGuests,
     identityDocuments,
+    paymentNotifications,
+    vacateNotifications,
   } = useAdmin();
 
-  const [view, setView] = useState<'active' | 'archived'>('active');
+  const [mode, setMode] = useState<ViewMode>('list');
+  const [filter, setFilter] = useState<Filter>('active');
+  const [search, setSearch] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [menuTarget, setMenuTarget] = useState<AdminResident | null>(null);
 
   // Restore dialog state
   const [restoreTarget, setRestoreTarget] = useState<ArchivedResident | null>(null);
   const [restoreRoomId, setRestoreRoomId] = useState<string | null>(null);
   const [restoreRent, setRestoreRent] = useState('');
 
-  const showingArchived = view === 'archived' && !filterRentStatus;
+  const effectiveFilter: Filter = filterRentStatus ? 'due' : filter;
 
-  const visibleResidents = filterRentStatus
-    ? residents.filter((r) => r.rentStatus === 'Pending' || r.rentStatus === 'Overdue')
-    : residents;
+  const unreadCount =
+    paymentNotifications.filter((n) => !n.read).length + vacateNotifications.filter((n) => !n.read).length;
 
-  // Rooms that still have a free bed — used when restoring a resident.
+  // ----- filter counts -----
+  const counts = {
+    active: residents.length,
+    all: residents.length + archivedResidents.length,
+    archived: archivedResidents.length,
+    male: residents.filter((r) => isGender(r, 'male')).length,
+    female: residents.filter((r) => isGender(r, 'female')).length,
+    vacating: residents.filter((r) => !!r.vacatingDate).length,
+    due: residents.filter((r) => r.rentStatus !== 'Paid').length,
+  };
+
+  const matchesSearch = (r: AdminResident, roomNumber: string) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      r.name.toLowerCase().includes(q) ||
+      roomNumber.toLowerCase().includes(q) ||
+      (r.phone ?? '').replace(/\s/g, '').includes(q.replace(/\s/g, '')) ||
+      ((r as any).email ?? '').toLowerCase().includes(q)
+    );
+  };
+
+  // Does an ACTIVE resident pass the selected chip?
+  const passesFilter = (r: AdminResident) => {
+    switch (effectiveFilter) {
+      case 'male':
+        return isGender(r, 'male');
+      case 'female':
+        return isGender(r, 'female');
+      case 'vacating':
+        return !!r.vacatingDate;
+      case 'due':
+        return r.rentStatus !== 'Paid';
+      default:
+        return true;
+    }
+  };
+
+  // ----- List View data -----
+  const entries = useMemo<Entry[]>(() => {
+    const active: Entry[] = residents
+      .filter(passesFilter)
+      .map((resident) => ({ resident, archived: false }));
+    const archived: Entry[] = archivedResidents.map((resident) => ({ resident, archived: true }));
+
+    let base: Entry[];
+    if (effectiveFilter === 'archived') base = archived;
+    else if (effectiveFilter === 'all') base = [...active, ...archived];
+    else base = active;
+
+    return base.filter((e) => matchesSearch(e.resident, getRoomNumber(rooms, e.resident.roomId)));
+  }, [residents, archivedResidents, rooms, effectiveFilter, search]);
+
+  // ----- Room-Wise View data -----
+  const roomCards = useMemo<RoomCardData[]>(() => {
+    if (effectiveFilter === 'archived') return [];
+    const q = search.trim().toLowerCase();
+
+    return [...rooms]
+      .sort(
+        (a, b) =>
+          a.propertyId.localeCompare(b.propertyId) ||
+          a.floor - b.floor ||
+          a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true })
+      )
+      .map((room) => {
+        const roomResidents = residents.filter((r) => r.roomId === room.id);
+        const guests = dailyGuests.filter((g) => g.roomId === room.id && isDailyGuestActiveNow(g));
+        const occupants: Occupant[] = [
+          ...roomResidents.map((r) => ({
+            key: `r_${r.id}`,
+            kind: 'resident' as const,
+            name: r.name,
+            phone: r.phone,
+            resident: r,
+          })),
+          ...guests.map((g) => ({ key: `g_${g.id}`, kind: 'guest' as const, name: g.name, phone: g.phone })),
+        ];
+
+        const propertyName = getPropertyName(properties, room.propertyId);
+        const rentFromResidents = roomResidents.find((r) => r.monthlyRent > 0)?.monthlyRent;
+        const rentPerBed =
+          rentFromResidents ??
+          MONTHLY_RENT_BY_CAPACITY[room.capacity] ??
+          properties.find((p) => p.id === room.propertyId)?.standardRent ??
+          null;
+
+        return {
+          room,
+          propertyName,
+          rentPerBed: rentPerBed ?? null,
+          beds: buildBeds(occupants, room.capacity),
+          occupied: occupants.length,
+          roomResidents,
+          occupants,
+        };
+      })
+      .filter((c: any) => {
+        // Resident chips only keep rooms that contain a matching resident.
+        if (['male', 'female', 'vacating', 'due'].includes(effectiveFilter)) {
+          if (!c.roomResidents.some(passesFilter)) return false;
+        }
+        if (!q) return true;
+        return (
+          c.room.roomNumber.toLowerCase().includes(q) ||
+          c.propertyName.toLowerCase().includes(q) ||
+          c.occupants.some(
+            (o: Occupant) =>
+              o.name.toLowerCase().includes(q) || (o.phone ?? '').replace(/\s/g, '').includes(q.replace(/\s/g, ''))
+          )
+        );
+      }) as RoomCardData[];
+  }, [rooms, residents, dailyGuests, properties, effectiveFilter, search]);
+
+  // Rooms that still have a free bed, used when restoring a resident.
   const roomsWithFreeBeds = useMemo(
     () =>
       rooms
@@ -253,51 +519,29 @@ export default function AdminResidentsScreen() {
     [rooms, residents, dailyGuests]
   );
 
-  // Exports exactly the list currently on screen (Active, Archived or Pending Rent)
-  // to an Excel file with every resident's details.
+  // ----- actions -----
   const handleExport = async () => {
-    const list: any[] = showingArchived ? archivedResidents : visibleResidents;
+    const list: any[] = entries.map((e) => e.resident);
     if (list.length === 0) {
       Alert.alert('Nothing to Export', 'There are no residents in this list yet.');
       return;
     }
     try {
       setExporting(true);
+      const label = filterRentStatus ? 'PendingRent' : effectiveFilter === 'archived' ? 'Archived' : effectiveFilter === 'all' ? 'All' : 'Active';
       const result = await exportResidentsToExcel({
         residents: list,
         rooms,
         properties,
         identityDocuments,
-        label: showingArchived ? 'Archived' : filterRentStatus ? 'PendingRent' : 'Active',
+        label: label as any,
       });
-      if (result === 'saved') {
-        Alert.alert('Saved', 'The Excel file was saved in the folder you chose.');
-      }
+      if (result === 'saved') Alert.alert('Saved', 'The Excel file was saved in the folder you chose.');
     } catch (e) {
       Alert.alert('Export Failed', 'Could not create the Excel file. Please try again.');
     } finally {
       setExporting(false);
     }
-  };
-
-  const handleRemove = (resident: AdminResident) => {
-    const roomNumber = getRoomNumber(rooms, resident.roomId);
-    Alert.alert(
-      'Remove Resident',
-      `What would you like to do with ${resident.name} (Room ${roomNumber})?\n\nArchive keeps their details so you can restore them if they return later. Delete Permanently erases everything.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Archive (can restore)',
-          onPress: () => archiveResident(resident.id),
-        },
-        {
-          text: 'Delete Permanently',
-          style: 'destructive',
-          onPress: () => confirmPermanentDelete(resident.id, resident.name),
-        },
-      ]
-    );
   };
 
   const confirmPermanentDelete = (residentId: string, name: string) => {
@@ -306,11 +550,18 @@ export default function AdminResidentsScreen() {
       `${name}'s details, documents and payment records will be erased for good. This can't be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete Permanently',
-          style: 'destructive',
-          onPress: () => permanentlyDeleteResident(residentId),
-        },
+        { text: 'Delete Permanently', style: 'destructive', onPress: () => permanentlyDeleteResident(residentId) },
+      ]
+    );
+  };
+
+  const confirmArchive = (resident: AdminResident) => {
+    Alert.alert(
+      'Archive Resident',
+      `Archive ${resident.name} (Room ${getRoomNumber(rooms, resident.roomId)})? Their bed is freed and their details are kept so you can restore them later.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Archive', onPress: () => archiveResident(resident.id) },
       ]
     );
   };
@@ -345,121 +596,222 @@ export default function AdminResidentsScreen() {
     }
     const name = restoreTarget.name;
     setRestoreTarget(null);
-    setView('active');
+    setFilter('active');
     Alert.alert('Resident Restored', `${name} is an active resident again.`);
   };
+
+  const openAllot = (room: Room) => navigation.navigate('AdminResidentForm', { roomId: room.id, propertyId: room.propertyId });
+
+  // ----- header (toggle, search, chips) -----
+  const CHIPS: { key: Filter; label: string }[] = [
+    { key: 'active', label: `Active (${counts.active})` },
+    { key: 'all', label: `All Records (${counts.all})` },
+    { key: 'archived', label: `Archived (${counts.archived})` },
+    { key: 'male', label: `Male (${counts.male})` },
+    { key: 'female', label: `Female (${counts.female})` },
+    { key: 'vacating', label: `Vacating (${counts.vacating})` },
+    { key: 'due', label: `Rent Due (${counts.due})` },
+  ];
+
+  const header = (
+    <View>
+      <View style={styles.toggle}>
+        <TouchableOpacity style={[styles.toggleItem, mode === 'list' && styles.toggleItemActive]} onPress={() => setMode('list')}>
+          <Ionicons name="list" size={16} color={mode === 'list' ? colors.white : colors.text} />
+          <Text style={[typography.caption, styles.toggleText, { color: mode === 'list' ? colors.white : colors.text }]}>
+            List View ({entries.length})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.toggleItem, mode === 'rooms' && styles.toggleItemActive]} onPress={() => setMode('rooms')}>
+          <Ionicons name="grid-outline" size={16} color={mode === 'rooms' ? colors.white : colors.text} />
+          <Text style={[typography.caption, styles.toggleText, { color: mode === 'rooms' ? colors.white : colors.text }]}>
+            Room-Wise View
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.searchRow}>
+        <Ionicons name="search" size={18} color={colors.primary} />
+        <TextInput
+          style={styles.searchInput}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search by name, room, phone..."
+          placeholderTextColor={colors.textMuted}
+        />
+        {!!search && (
+          <TouchableOpacity onPress={() => setSearch('')}>
+            <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {!filterRentStatus && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+          {CHIPS.map((c) => {
+            const on = filter === c.key;
+            return (
+              <TouchableOpacity
+                key={c.key}
+                style={[styles.chip, on && (c.key === 'active' ? styles.chipActiveGreen : styles.chipActive)]}
+                onPress={() => setFilter(c.key)}
+              >
+                <Text style={[styles.chipText, { color: on ? colors.white : colors.text }]}>{c.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.headerRow}>
-        <View>
-          <Text style={[typography.heading2, { color: colors.text }]}>
-            {filterRentStatus ? 'Pending Rent' : 'Residents'}
-          </Text>
-          <Text style={[typography.body, { color: colors.textMuted }]}>
-            {showingArchived ? `${archivedResidents.length} archived` : `${visibleResidents.length} total`}
-          </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={[typography.heading2, { color: colors.text }]}>{filterRentStatus ? 'Pending Rent' : 'Residents'}</Text>
         </View>
-        <TouchableOpacity
-          style={styles.addButton}
-          activeOpacity={0.85}
-          onPress={() => navigation.navigate('AdminResidentForm', {})}
-        >
-          <Ionicons name="add" size={24} color={colors.white} />
+        <TouchableOpacity style={styles.headerIcon} onPress={handleExport} disabled={exporting}>
+          <Ionicons name={exporting ? 'hourglass-outline' : 'download-outline'} size={22} color={colors.text} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.headerIcon} onPress={() => navigation.navigate('AdminPaymentNotifications')}>
+          <Ionicons name="notifications-outline" size={24} color={colors.text} />
+          {unreadCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>{unreadCount}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 
-      {!filterRentStatus && (
-        <View style={styles.segment}>
-          <TouchableOpacity
-            style={[styles.segmentItem, view === 'active' && styles.segmentItemActive]}
-            onPress={() => setView('active')}
-          >
-            <Text
-              style={[
-                typography.caption,
-                { color: view === 'active' ? colors.white : colors.text, fontWeight: '700' },
-              ]}
-            >
-              Active ({residents.length})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.segmentItem, view === 'archived' && styles.segmentItemActive]}
-            onPress={() => setView('archived')}
-          >
-            <Text
-              style={[
-                typography.caption,
-                { color: view === 'archived' ? colors.white : colors.text, fontWeight: '700' },
-              ]}
-            >
-              Archived ({archivedResidents.length})
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Export the resident details shown below to an Excel sheet */}
-      <TouchableOpacity
-        style={[styles.exportButton, exporting && { opacity: 0.6 }]}
-        activeOpacity={0.85}
-        onPress={handleExport}
-        disabled={exporting}
-      >
-        <Ionicons name="download-outline" size={18} color={colors.white} />
-        <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>
-          {exporting ? 'Preparing...' : 'Export to Excel'}
-        </Text>
-      </TouchableOpacity>
-
-      {showingArchived ? (
+      {mode === 'list' ? (
         <FlatList
-          data={archivedResidents}
-          keyExtractor={(item) => item.id}
+          data={entries}
+          keyExtractor={(e) => `${e.archived ? 'a' : 'r'}_${e.resident.id}`}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={header}
           ListEmptyComponent={
             <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
-              No archived residents. Residents you archive will appear here so you can restore them later.
+              {effectiveFilter === 'archived'
+                ? 'No archived residents. Residents you archive will appear here so you can restore them later.'
+                : search
+                ? 'No residents match your search.'
+                : 'No residents in this list yet.'}
             </Text>
           }
-          renderItem={({ item }) => (
-            <ArchivedResidentCard
-              resident={item}
-              rooms={rooms}
-              properties={properties}
-              onRestore={() => openRestore(item)}
-              onDeletePermanently={() => confirmPermanentDelete(item.id, item.name)}
-            />
-          )}
+          renderItem={({ item }) =>
+            item.archived ? (
+              <ArchivedResidentCard
+                resident={item.resident as ArchivedResident}
+                rooms={rooms}
+                properties={properties}
+                onRestore={() => openRestore(item.resident as ArchivedResident)}
+                onDeletePermanently={() => confirmPermanentDelete(item.resident.id, item.resident.name)}
+              />
+            ) : (
+              <ResidentCard
+                resident={item.resident as AdminResident}
+                rooms={rooms}
+                properties={properties}
+                onPress={() => navigation.navigate('AdminResidentDetail', { residentId: item.resident.id })}
+                onMenu={() => setMenuTarget(item.resident as AdminResident)}
+              />
+            )
+          }
         />
       ) : (
         <FlatList
-          data={visibleResidents}
-          keyExtractor={(item) => item.id}
+          data={roomCards}
+          keyExtractor={(c) => c.room.id}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={header}
+          ListEmptyComponent={
+            <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
+              {effectiveFilter === 'archived'
+                ? 'Archived residents are not in any room. Switch to List View to see them.'
+                : rooms.length === 0
+                ? 'No rooms yet. Add rooms from Room Management.'
+                : 'No rooms match your search or filter.'}
+            </Text>
+          }
           renderItem={({ item }) => (
-            <ResidentCard
-              resident={item}
-              rooms={rooms}
+            <RoomCard
+              data={item}
+              showProperty={properties.length > 1}
               properties={properties}
-              onPress={() => navigation.navigate('AdminResidentDetail', { residentId: item.id })}
-              onEdit={() => navigation.navigate('AdminResidentForm', { residentId: item.id })}
-              onDelete={() => handleRemove(item)}
+              onOpenResident={(id) => navigation.navigate('AdminResidentDetail', { residentId: id })}
+              onAllot={openAllot}
             />
           )}
         />
       )}
 
+      <TouchableOpacity style={styles.fab} activeOpacity={0.85} onPress={() => navigation.navigate('AdminResidentForm', {})}>
+        <Ionicons name="add" size={30} color={colors.white} />
+      </TouchableOpacity>
+
+      {/* Three-dot menu for a resident */}
+      <Modal visible={!!menuTarget} transparent animationType="fade" onRequestClose={() => setMenuTarget(null)}>
+        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuTarget(null)}>
+          <View style={styles.menuSheet}>
+            <Text style={[typography.bodyBold, { color: colors.text, marginBottom: spacing.xs }]} numberOfLines={1}>
+              {menuTarget?.name}
+            </Text>
+            {[
+              {
+                icon: 'person-outline',
+                label: 'View Details',
+                color: colors.text,
+                onPress: () => navigation.navigate('AdminResidentDetail', { residentId: menuTarget!.id }),
+              },
+              {
+                icon: 'create-outline',
+                label: 'Edit Resident',
+                color: colors.text,
+                onPress: () => navigation.navigate('AdminResidentForm', { residentId: menuTarget!.id }),
+              },
+              {
+                icon: 'logo-whatsapp',
+                label: menuTarget?.rentStatus !== 'Paid' ? 'Send Rent Reminder' : 'WhatsApp Chat',
+                color: WHATSAPP_GREEN,
+                onPress: () => messageResident(menuTarget!, getRoomNumber(rooms, menuTarget!.roomId), properties),
+              },
+              {
+                icon: 'archive-outline',
+                label: 'Archive (can restore)',
+                color: colors.warning,
+                onPress: () => confirmArchive(menuTarget!),
+              },
+              {
+                icon: 'trash-outline',
+                label: 'Delete Permanently',
+                color: colors.error,
+                onPress: () => confirmPermanentDelete(menuTarget!.id, menuTarget!.name),
+              },
+            ].map((item) => (
+              <TouchableOpacity
+                key={item.label}
+                style={styles.menuItem}
+                onPress={() => {
+                  const action = item.onPress;
+                  setMenuTarget(null);
+                  action();
+                }}
+              >
+                <Ionicons name={item.icon as any} size={20} color={item.color} />
+                <Text style={[typography.body, { color: item.color, marginLeft: spacing.sm }]}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Restore dialog */}
-      <Modal
-        visible={!!restoreTarget}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setRestoreTarget(null)}
-      >
+      <Modal visible={!!restoreTarget} transparent animationType="fade" onRequestClose={() => setRestoreTarget(null)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.overlay}>
             <View style={styles.sheet}>
@@ -471,8 +823,7 @@ export default function AdminResidentsScreen() {
               </View>
               {restoreTarget && (
                 <Text style={[typography.body, { color: colors.textMuted, marginBottom: spacing.sm }]}>
-                  {restoreTarget.name} will become an active resident again with rent set to Pending and today as the
-                  joining date.
+                  {restoreTarget.name} will become an active resident again with rent set to Pending and today as the joining date.
                 </Text>
               )}
 
@@ -499,8 +850,7 @@ export default function AdminResidentsScreen() {
                             {isOldRoom ? ' (previous room)' : ''}
                           </Text>
                           <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
-                            {getPropertyName(properties, room.propertyId)} · Floor {room.floor} · {free} bed
-                            {free !== 1 ? 's' : ''} free
+                            {getPropertyName(properties, room.propertyId)} · Floor {room.floor} · {free} bed{free !== 1 ? 's' : ''} free
                           </Text>
                         </View>
                         {selected && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
@@ -532,57 +882,62 @@ export default function AdminResidentsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: spacing.md,
-  },
-  addButton: {
-    backgroundColor: colors.primary,
-    width: 40,
-    height: 40,
+  container: { flex: 1, backgroundColor: colors.background },
+  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  headerIcon: { padding: spacing.xs, marginLeft: spacing.xs },
+  bellBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    backgroundColor: colors.error,
     borderRadius: radius.full,
+    minWidth: 16,
+    height: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 3,
   },
-  segment: {
+  bellBadgeText: { color: colors.white, fontSize: 10, fontWeight: '700' },
+  listContent: { paddingHorizontal: spacing.md, paddingBottom: 110 },
+
+  toggle: {
     flexDirection: 'row',
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
     backgroundColor: colors.surface,
-    borderRadius: radius.full,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 3,
+    padding: 4,
   },
-  segmentItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radius.full,
-  },
-  segmentItemActive: {
-    backgroundColor: colors.primary,
-  },
-  exportButton: {
+  toggleItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.sm, borderRadius: radius.sm },
+  toggleItemActive: { backgroundColor: colors.primary },
+  toggleText: { fontWeight: '700', marginLeft: 6 },
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.success,
+    backgroundColor: colors.surface,
     borderRadius: radius.md,
-    paddingVertical: spacing.sm,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  listContent: {
+    borderWidth: 1,
+    borderColor: colors.border,
     paddingHorizontal: spacing.md,
-    paddingBottom: spacing.xl,
+    marginTop: spacing.sm,
   },
+  searchInput: { flex: 1, paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, color: colors.text, fontSize: 14 },
+  chipRow: { gap: spacing.xs, paddingVertical: spacing.sm },
+  chip: {
+    height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipActiveGreen: { backgroundColor: colors.success, borderColor: colors.success },
+  chipText: { fontSize: 13, fontWeight: '700', includeFontPadding: false },
+
+  // list cards
   card: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -593,6 +948,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  cardBody: { flex: 1, marginHorizontal: spacing.sm },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.full,
+    backgroundColor: AVATAR_ORANGE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: { width: 44, height: 44, borderRadius: radius.full },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  roomTag: { backgroundColor: '#FEF3C7', borderRadius: radius.sm, paddingHorizontal: 6, paddingVertical: 2, marginRight: 6 },
+  roomTagText: { color: '#B45309', fontSize: 12, fontWeight: '800' },
+  rentPill: { alignSelf: 'flex-start', paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full, marginTop: 4 },
+  roundIcon: { padding: 6, marginLeft: 2 },
+
   archivedCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -601,116 +973,90 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  archivedTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  archivedActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  archivedButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-  },
-  restoreButton: {
-    backgroundColor: colors.success,
-  },
-  permDeleteButton: {
-    borderWidth: 1,
-    borderColor: colors.error,
+  archivedTop: { flexDirection: 'row', alignItems: 'center' },
+  archivedActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  archivedButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.sm, borderRadius: radius.md },
+  restoreButton: { backgroundColor: colors.success },
+  permDeleteButton: { borderWidth: 1, borderColor: colors.error, backgroundColor: colors.surface },
+
+  // room cards
+  roomCard: {
     backgroundColor: colors.surface,
-  },
-  avatarWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
-    overflow: 'hidden',
-  },
-  avatarImage: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-  },
-  content: {
-    flex: 1,
-  },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  badge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radius.full,
-  },
-  phoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  phoneActions: {
-    flexDirection: 'row',
-  },
-  phoneActionButton: {
-    marginLeft: spacing.sm,
-    padding: 2,
-  },
-  rowIconButton: {
-    padding: spacing.xs,
-    marginLeft: spacing.xs,
-  },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: spacing.lg,
-  },
-  sheet: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    maxHeight: '90%',
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  label: {
-    color: colors.textMuted,
-    marginBottom: spacing.xs,
-    marginTop: spacing.sm,
-  },
-  roomList: {
-    maxHeight: 200,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.background,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  roomOption: {
+  roomHeader: { flexDirection: 'row', alignItems: 'center' },
+  roomBadge: { backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  roomBadgeText: { color: colors.white, fontWeight: '800', fontSize: 14 },
+  vacancyPill: { borderWidth: 1, borderColor: '#F59E0B', backgroundColor: '#FFFBEB', borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 4 },
+  fullPill: { borderColor: colors.success, backgroundColor: '#ECFDF5' },
+  sectionLabel: { color: colors.primary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginTop: spacing.md, marginBottom: spacing.sm },
+  bedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.sm,
+    marginBottom: spacing.xs,
   },
-  roomOptionSelected: {
-    backgroundColor: colors.primaryLight,
+  bedTag: { backgroundColor: '#FEF3C7', borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 4, marginRight: spacing.sm },
+  bedTagVacant: { backgroundColor: '#D1FAE5' },
+  bedTagText: { color: '#B45309', fontSize: 12, fontWeight: '800' },
+  smallIcon: { padding: 6 },
+  vacantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    padding: spacing.sm,
+    marginBottom: spacing.xs,
   },
+  allotButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xs },
+  allVacantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+
+  fab: {
+    position: 'absolute',
+    right: spacing.md,
+    bottom: spacing.lg,
+    width: 58,
+    height: 58,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+  },
+
+  // menu + dialogs
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.lg },
+  menuSheet: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm + 2, borderTopWidth: 1, borderTopColor: colors.border },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.lg },
+  sheet: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, maxHeight: '90%' },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
+  label: { color: colors.textMuted, marginBottom: spacing.xs, marginTop: spacing.sm },
+  roomList: { maxHeight: 200, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background },
+  roomOption: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  roomOptionSelected: { backgroundColor: colors.primaryLight },
   input: {
     backgroundColor: colors.background,
     borderRadius: radius.md,
@@ -721,11 +1067,5 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
   },
-  confirmButton: {
-    backgroundColor: colors.success,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    marginTop: spacing.lg,
-  },
+  confirmButton: { backgroundColor: colors.success, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center', marginTop: spacing.lg },
 });

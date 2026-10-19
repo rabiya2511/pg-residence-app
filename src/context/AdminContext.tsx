@@ -48,6 +48,9 @@ export type AdminVacateNotification = {
   reason: string | null;
   read: boolean;
   createdAt: number;
+  reminder?: boolean;   // true for the "vacating soon" reminders
+  daysLeft?: number;    // 2, 1 or 0
+  message?: string;     // ready-to-show text for reminders
 };
 
 // Fired every time a complaint is created (including maintenance requests,
@@ -569,6 +572,46 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const markAllVacateNotificationsRead = () => markAllRead('vacate');
   const markComplaintNotificationRead = markNotificationRead;
   const markAllComplaintNotificationsRead = () => markAllRead('complaint');
+    // ───────── Vacate reminders: from 2 days before the vacating date up to the vacating day ─────────
+  const remindedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isAdminSession || !residentsLoaded || !notifQ.loaded) return;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    residents.forEach((r) => {
+      if (!r.vacatingDate) return;
+      const vd = parseDisplayDate(r.vacatingDate);
+      if (!vd) return;
+      const daysLeft = Math.round((vd.getTime() - today) / (1000 * 60 * 60 * 24));
+      if (daysLeft < 0 || daysLeft > 2) return; // only the 2 days before, plus the day itself
+
+      const id = `vr_${r.id}_${vd.getTime()}_${daysLeft}`;
+      if (remindedRef.current.has(id)) return;
+      if (notifQ.data.some((n) => n.id === id)) return; // already created (and maybe already read)
+      remindedRef.current.add(id);
+
+      const when = daysLeft === 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : 'in 2 days';
+      pushNotification(
+        'vacate',
+        {
+          id,
+          residentId: r.id,
+          residentName: r.name,
+          vacatingDate: r.vacatingDate,
+          isEmergency: r.emergencyVacateDeductionPercent != null,
+          deductionPercent: r.emergencyVacateDeductionPercent ?? null,
+          reason: r.vacateReason ?? null,
+          read: false,
+          createdAt: Date.now(),
+          reminder: true,
+          daysLeft,
+          message: `${r.name} is vacating ${when} (${r.vacatingDate}).`,
+        },
+        r.propertyId
+      );
+    });
+  }, [residents, notifQ.data, residentsLoaded, notifQ.loaded, isAdminSession]);
 
   // ───────── Rent payments ─────────
   const markRentPaid = (residentId: string) => {
@@ -872,14 +915,30 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     batch.commit().catch(warn('permanentlyDeleteResident:'));
   };
 
-  const submitVacateNotice = (
+    const submitVacateNotice = (
     residentId: string,
     vacatingDate: string | null,
     isEmergency: boolean = false,
     reason: string | null = null
   ) => {
-    const resident = rawResidents.find((r) => r.id === residentId);
 
+    const oldReminders = notifQ.data.filter(
+      (n) => n.kind === 'vacate' && n.reminder && n.residentId === residentId
+    );
+    if (oldReminders.length > 0) {
+      const cleanup = writeBatch(db);
+      oldReminders.forEach((n) => cleanup.delete(doc(db, 'notifications', n.id)));
+      cleanup.commit().catch(warn('clear vacate reminders:'));
+    }
+    if (vacatingDate) {
+      // A new date was set: let reminders for it be created afresh.
+      remindedRef.current.forEach((rid) => {
+        if (rid.startsWith(`vr_${residentId}_`)) remindedRef.current.delete(rid);
+      });
+    }
+
+    const resident = rawResidents.find((r) => r.id === residentId);
+   
     let deductionPercent: number | null = null;
     if (vacatingDate && isEmergency) {
       const vacateDateObj = parseDisplayDate(vacatingDate);
