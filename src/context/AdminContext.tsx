@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { getAuth } from '@react-native-firebase/auth';
 import {
-  getFirestore, collection, doc, onSnapshot, query, where, setDoc, updateDoc, writeBatch,
+  getFirestore, collection, doc, onSnapshot, query, where, setDoc, updateDoc, writeBatch, getDocs,
 } from '@react-native-firebase/firestore';
 import {
   MONTHLY_RENT_BY_CAPACITY,
@@ -24,6 +24,7 @@ import {
 } from '../constants/mockData';
 import { uploadImage } from '../utils/uploadImage';
 import { useMockAuth } from './MockAuthContext';
+import { useActivePropertyId, setActivePropertyId } from './activeProperty';
 
 export type AdminPaymentNotification = {
   id: string;
@@ -168,6 +169,10 @@ type AdminContextType = {
   complaintNotifications: AdminComplaintNotification[];
   properties: Property[];
   publicProperties: Property[];
+  /** The branch the admin is currently working in. Every list below is for this property only. */
+  activePropertyId: string | null;
+  activeProperty: Property | undefined;
+  setActiveProperty: (propertyId: string) => void;
   rooms: Room[];
   archivedResidents: ArchivedResident[];
   markRentPaid: (residentId: string) => void;
@@ -226,6 +231,8 @@ type AdminContextType = {
     amount: number,
     method: AdminDailyGuestPaymentMethod
   ) => void;
+  updateDailyGuest: (guestId: string, updates: Partial<AdminDailyGuest>) => void;
+  uploadDailyGuestImage: (guestId: string, field: string, uri: string) => void;
   addProperty: (name: string, details?: NewPropertyDetails) => Property;
   updatePropertyDetails: (propertyId: string, updates: PropertyDetailsUpdates) => void;
   addPropertyImages: (propertyId: string, uris: string[]) => void;
@@ -284,7 +291,9 @@ function parseDisplayDate(str: string): Date | null {
 // already, and either no vacating date yet or that date hasn't passed.
 // Used by room-occupancy screens to count active guests alongside residents.
 export function isDailyGuestActiveNow(guest: AdminDailyGuest): boolean {
+  if (guest.checkedOut) return false; // checked out: the bed is free again
   const now = Date.now();
+  // ...the rest stays as it is
 
   if (now < guest.checkInTimestamp) return false; // upcoming, not checked in yet
 
@@ -302,6 +311,17 @@ export function isDailyGuestActiveNow(guest: AdminDailyGuest): boolean {
   ).getTime();
 
   return now <= endOfVacateDay;
+}
+
+// True while a resident is pre-booked: the flag is on AND the joining date is still in the future.
+// On the joining date itself they count as active.
+export function isPreBookedNow(r: { isPreBooking?: boolean; joiningDate: string }): boolean {
+  if (!r.isPreBooking) return false;
+  const jd = parseDisplayDate(r.joiningDate);
+  if (!jd) return false;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return jd.getTime() > today;
 }
 
 // ───────────────────────── Firestore helpers ─────────────────────────
@@ -349,8 +369,8 @@ function useCollection<T = any>(name: string, getConstraint: () => any, depKey: 
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   useEffect(() => {
     const constraint = getConstraint();
+    setData([]); // never show the previous query's documents (e.g. the previous property)
     if (!constraint) {
-      setData([]);
       setLoadedKey(depKey);
       return;
     }
@@ -378,7 +398,51 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const db = getFirestore();
   const isAdminSession = !!adminPropertyIds;
   const idsKey = adminPropertyIds?.join(',') ?? '';
-  const sessionKey = `${idsKey}|${sessionResidentId ?? ''}`;
+
+  // ───────── Active property: an admin works in ONE property at a time ─────────
+  // Everything below (residents, rooms, rent, complaints, guests, notifications ...) is
+  // loaded for the active property only, so properties never mix their data.
+  const rawActiveId = useActivePropertyId();
+  const activeId: string | null = adminPropertyIds
+    ? rawActiveId && adminPropertyIds.includes(rawActiveId)
+      ? rawActiveId
+      : adminPropertyIds[0] ?? null
+    : null;
+  const scopedIds: string[] | null = adminPropertyIds ? (activeId ? [activeId] : []) : null;
+  const scopeKey = activeId ?? '';
+  const sessionKey = `${scopeKey}|${sessionResidentId ?? ''}`;
+
+  // The choice is saved on the admin's users/{uid} document so it survives restarts.
+  const [remoteActive, setRemoteActive] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setRemoteActive(undefined);
+    if (!isAdminSession) return;
+    const uid = getAuth().currentUser?.uid;
+    if (!uid) return;
+    let first = true;
+    return onSnapshot(
+      doc(db, 'users', uid),
+      (snap: any) => {
+        if (snap.metadata.fromCache) return; // only trust what the server says
+        const v: string | null = snapExists(snap) ? snap.data()?.activePropertyId ?? null : null;
+        setRemoteActive(v);
+        if (first) {
+          first = false;
+          if (v) setActivePropertyId(v); // restore the last chosen property
+        }
+      },
+      warn('users listener:')
+    );
+  }, [isAdminSession]);
+
+  useEffect(() => {
+    if (!isAdminSession || !activeId || remoteActive === undefined || remoteActive === activeId) return;
+    const uid = getAuth().currentUser?.uid;
+    if (!uid) return;
+    updateDoc(doc(db, 'users', uid), { activePropertyId: activeId }).catch(warn('save active property:'));
+  }, [activeId, remoteActive, isAdminSession]);
+
+  const setActiveProperty = (propertyId: string) => setActivePropertyId(propertyId);
 
   // ───────── Properties ─────────
   const publicPropsQ = useCollection<Property>(
@@ -418,7 +482,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const [residentsLoaded, setResidentsLoaded] = useState(false);
   useEffect(() => {
     setResidentsLoaded(false);
-    const ids = adminPropertyIds?.slice(0, MAX_IN) ?? [];
+    setRawResidents([]); // drop the previous property's residents straight away
+    const ids = scopedIds ?? [];
     let unsub: (() => void) | undefined;
     if (adminPropertyIds && ids.length > 0) {
       unsub = onSnapshot(
@@ -458,7 +523,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   // ───────── Rooms (admin: their properties; resident: public properties + their own) ─────────
   const ownPropertyId: string | undefined = rawResidents.find((r) => r.id === sessionResidentId)?.propertyId;
   const roomPropertyIds =
-    adminPropertyIds ??
+    scopedIds ??
     Array.from(new Set([...publicProps.map((p) => p.id), ...(ownPropertyId ? [ownPropertyId] : [])]));
   const rooms = useCollection<Room>(
     'rooms', () => inConstraint('propertyId', roomPropertyIds), roomPropertyIds.join(',')
@@ -466,18 +531,18 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   // ───────── Payments, complaints, notifications, guests, identity documents ─────────
   const scopeConstraint = () =>
-    adminPropertyIds
-      ? inConstraint('propertyId', adminPropertyIds)
+    scopedIds
+      ? inConstraint('propertyId', scopedIds)
       : sessionResidentId
       ? where('residentId', '==', sessionResidentId)
       : null;
-  const adminOnlyConstraint = () => inConstraint('propertyId', adminPropertyIds);
+  const adminOnlyConstraint = () => inConstraint('propertyId', scopedIds);
 
   const paymentsQ = useCollection<any>('payments', scopeConstraint, sessionKey);
   const complaintsQ = useCollection<any>('complaints', scopeConstraint, sessionKey);
-  const notifQ = useCollection<any>('notifications', adminOnlyConstraint, idsKey);
-  const guestsQ = useCollection<any>('dailyGuests', adminOnlyConstraint, idsKey);
-  const idDocsQ = useCollection<any>('identityDocuments', adminOnlyConstraint, idsKey);
+  const notifQ = useCollection<any>('notifications', adminOnlyConstraint, scopeKey);
+  const guestsQ = useCollection<any>('dailyGuests', adminOnlyConstraint, scopeKey);
+  const idDocsQ = useCollection<any>('identityDocuments', adminOnlyConstraint, scopeKey);
 
   const dailyGuests = useMemo(() => [...guestsQ.data].sort(byNewest) as AdminDailyGuest[], [guestsQ.data]);
   const complaints = useMemo(() => [...complaintsQ.data].sort(byNewest) as AdminComplaint[], [complaintsQ.data]);
@@ -520,6 +585,35 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     [idDocsQ.data, pendingUris]
   );
 
+  // Ticks when the calendar day changes, or when the app comes back to the foreground,
+  // so pre-bookings switch to active on their joining date without a restart.
+  const [dayKey, setDayKey] = useState(() => new Date().toDateString());
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') setDayKey(new Date().toDateString());
+    });
+    const timer = setInterval(() => setDayKey(new Date().toDateString()), 60 * 1000);
+    return () => {
+      sub.remove();
+      clearInterval(timer);
+    };
+  }, []);
+
+  // When a pre-booked resident's joining date arrives, make them a normal active resident.
+  const activatedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isAdminSession || !residentsLoaded) return;
+    residents.forEach((r) => {
+      if (!r.isPreBooking || activatedRef.current.has(r.id)) return;
+      if (isPreBookedNow(r)) return; // joining date is still ahead
+      activatedRef.current.add(r.id);
+      updateDoc(doc(db, 'residents', r.id), {
+        isPreBooking: false,
+        activatedOn: formatDisplayDate(new Date()),
+      }).catch(warn('activate pre-booking:'));
+    });
+  }, [residents, residentsLoaded, isAdminSession, dayKey]);
+
   // ───────── Monthly rent records: make sure every active resident has one for this month ─────────
   const generatedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -527,6 +621,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     const now = new Date();
     const label = getMonthLabel(now);
     residents.forEach((r) => {
+      if (isPreBookedNow(r)) return; // no rent until they actually join
       const id = paymentDocId(r.id, label);
       if (generatedRef.current.has(id)) return;
       if (paymentsQ.data.some((p) => p.residentId === r.id && p.month === label)) return;
@@ -547,7 +642,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         })
       ).catch(warn('generate rent record:'));
     });
-  }, [residents, paymentsQ.data, residentsLoaded, paymentsQ.loaded, isAdminSession]);
+  }, [residents, paymentsQ.data, residentsLoaded, paymentsQ.loaded, isAdminSession, dayKey]);
 
   // ───────── Notifications ─────────
   const pushNotification = (
@@ -572,7 +667,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const markAllVacateNotificationsRead = () => markAllRead('vacate');
   const markComplaintNotificationRead = markNotificationRead;
   const markAllComplaintNotificationsRead = () => markAllRead('complaint');
-    // ───────── Vacate reminders: from 2 days before the vacating date up to the vacating day ─────────
+
+  // ───────── Vacate reminders: from 2 days before the vacating date up to the vacating day ─────────
   const remindedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!isAdminSession || !residentsLoaded || !notifQ.loaded) return;
@@ -611,7 +707,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         r.propertyId
       );
     });
-  }, [residents, notifQ.data, residentsLoaded, notifQ.loaded, isAdminSession]);
+  }, [residents, notifQ.data, residentsLoaded, notifQ.loaded, isAdminSession, dayKey]);
 
   // ───────── Rent payments ─────────
   const markRentPaid = (residentId: string) => {
@@ -713,7 +809,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       : rawResidents.find((r) => r.name === input.residentName);
 
     const residentId = input.residentId || resident?.id || '';
-    const propertyId = input.propertyId || resident?.propertyId || adminPropertyIds?.[0] || '';
+    const propertyId = input.propertyId || resident?.propertyId || activeId || '';
 
     const newComplaint: AdminComplaint = {
       id,
@@ -915,13 +1011,13 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     batch.commit().catch(warn('permanentlyDeleteResident:'));
   };
 
-    const submitVacateNotice = (
+  const submitVacateNotice = (
     residentId: string,
     vacatingDate: string | null,
     isEmergency: boolean = false,
     reason: string | null = null
   ) => {
-
+    // Remove reminders left over from an earlier vacating date or a cancelled notice.
     const oldReminders = notifQ.data.filter(
       (n) => n.kind === 'vacate' && n.reminder && n.residentId === residentId
     );
@@ -938,7 +1034,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     }
 
     const resident = rawResidents.find((r) => r.id === residentId);
-   
+
     let deductionPercent: number | null = null;
     if (vacatingDate && isEmergency) {
       const vacateDateObj = parseDisplayDate(vacatingDate);
@@ -1053,15 +1149,46 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     return newGuest;
   };
 
+    // A payment goes to the stay rent first; anything left over goes to the security deposit.
   const recordDailyGuestPayment = (guestId: string, amount: number, method: AdminDailyGuestPaymentMethod) => {
     const g = dailyGuests.find((x) => x.id === guestId);
     if (!g || amount <= 0) return;
-    const newAdvance = Math.min(g.totalAmount, (g.advanceAmount ?? 0) + amount);
-    updateDoc(doc(db, 'dailyGuests', guestId), {
-      advanceAmount: newAdvance,
-      paymentMethod: method,
-      paymentStatus: newAdvance >= g.totalAmount ? 'Paid' : 'Pending',
-    }).catch(warn('recordDailyGuestPayment:'));
+
+    const deposit = g.securityDeposit ?? 0;
+    const depositPaidSoFar = g.depositPaid ?? (g.advanceDepositStatus === 'Paid' ? deposit : 0);
+    const stayDue = Math.max(0, g.totalAmount - (g.advanceAmount ?? 0));
+    const toStay = Math.min(stayDue, amount);
+    const toDeposit = Math.min(Math.max(0, deposit - depositPaidSoFar), amount - toStay);
+    if (toStay + toDeposit <= 0) return;
+
+    const newAdvance = (g.advanceAmount ?? 0) + toStay;
+    const newDepositPaid = depositPaidSoFar + toDeposit;
+
+    updateDoc(
+      doc(db, 'dailyGuests', guestId),
+      clean({
+        advanceAmount: newAdvance,
+        depositPaid: newDepositPaid,
+        advanceDepositStatus: deposit > 0 ? (newDepositPaid >= deposit ? 'Paid' : 'Not Paid') : 'No Advance',
+        paymentMethod: method,
+        paymentStatus: newAdvance >= g.totalAmount ? 'Paid' : 'Pending',
+        ...(toStay > 0 ? { payments: [...(g.payments ?? []), { amount: toStay, method, at: Date.now() }] } : {}),
+      })
+    ).catch(warn('recordDailyGuestPayment:'));
+  };
+
+  const updateDailyGuest = (guestId: string, updates: Partial<AdminDailyGuest>) => {
+    const patch: Record<string, any> = { ...updates };
+    delete patch.id;
+    updateDoc(doc(db, 'dailyGuests', guestId), clean(patch)).catch(warn('updateDailyGuest:'));
+  };
+
+  // Uploads a local photo to Storage, then swaps the document's field for the cloud link.
+  const uploadDailyGuestImage = (guestId: string, field: string, uri: string) => {
+    if (!uri || /^https?:/.test(uri)) return;
+    uploadImage(uri, `dailyGuests/${guestId}/${field}-${Date.now()}.jpg`)
+      .then((url) => updateDoc(doc(db, 'dailyGuests', guestId), { [field]: url }))
+      .catch(warn('uploadDailyGuestImage:'));
   };
 
   // ───────── Properties and rooms ─────────
@@ -1084,11 +1211,12 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       upiId: details.upiId ?? null,
       whatsappGroupLink: details.whatsappGroupLink ?? null,
     };
-      setDoc(
-        doc(db, 'properties', id),
-        clean({ ...newProperty, isPublic: false, ownerUid: getAuth().currentUser?.uid })
-      ).catch(warn('addProperty:'));
+    setDoc(
+      doc(db, 'properties', id),
+      clean({ ...newProperty, isPublic: false, ownerUid: getAuth().currentUser?.uid })
+    ).catch(warn('addProperty:'));
     addPropertyToCurrentAdmin(id);
+    setActivePropertyId(id); // switch to the new (empty) property right away
     return newProperty;
   };
 
@@ -1111,20 +1239,35 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     updateDoc(doc(db, 'properties', propertyId), { images: current.images.filter((i) => i !== uri) })
       .catch(warn('removePropertyImage:'));
   };
-    // Deletes a property and its rooms. Refused while anyone is still living there.
+
+  // Deletes a property and its rooms. Refused while anyone is still living there.
+  // Checks the database itself, because only the ACTIVE property's data is held in memory.
   const deleteProperty = async (propertyId: string): Promise<{ ok: boolean; message?: string }> => {
-    const liveResidents = residents.filter((r) => r.propertyId === propertyId).length;
-    if (liveResidents > 0) {
-      return {
-        ok: false,
-        message: `${liveResidents} resident${liveResidents > 1 ? 's' : ''} still live in this property. Transfer or archive them first.`,
-      };
-    }
-    const liveGuests = dailyGuests.filter(
-      (g) => g.propertyId === propertyId && (isDailyGuestActiveNow(g) || g.checkInTimestamp > Date.now())
-    ).length;
-    if (liveGuests > 0) {
-      return { ok: false, message: 'This property still has current or upcoming day guests.' };
+    let propertyRoomIds: string[] = [];
+    try {
+      const [resSnap, guestSnap, roomSnap] = await Promise.all([
+        getDocs(query(collection(db, 'residents'), where('propertyId', '==', propertyId))),
+        getDocs(query(collection(db, 'dailyGuests'), where('propertyId', '==', propertyId))),
+        getDocs(query(collection(db, 'rooms'), where('propertyId', '==', propertyId))),
+      ]);
+      const liveResidents = resSnap.docs.filter((d: any) => !d.data().archived).length;
+      if (liveResidents > 0) {
+        return {
+          ok: false,
+          message: `${liveResidents} resident${liveResidents > 1 ? 's' : ''} still live in this property. Transfer or archive them first.`,
+        };
+      }
+      const liveGuests = guestSnap.docs.filter((d: any) => {
+        const g = d.data() as AdminDailyGuest;
+        return isDailyGuestActiveNow(g) || g.checkInTimestamp > Date.now();
+      }).length;
+      if (liveGuests > 0) {
+        return { ok: false, message: 'This property still has current or upcoming day guests.' };
+      }
+      propertyRoomIds = roomSnap.docs.map((d: any) => d.id);
+    } catch (e: any) {
+      console.warn('deleteProperty check failed:', e?.code ?? e?.message);
+      return { ok: false, message: 'Could not check this property. Check your connection and try again.' };
     }
 
     // Stops the "create empty New PG" effect from re-creating it while it is being deleted.
@@ -1132,19 +1275,24 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     try {
       const batch = writeBatch(db);
       batch.delete(doc(db, 'properties', propertyId));
-      rooms
-        .filter((r) => r.propertyId === propertyId)
-        .forEach((r) => batch.delete(doc(db, 'rooms', r.id)));
+      propertyRoomIds.forEach((roomId) => batch.delete(doc(db, 'rooms', roomId)));
       await batch.commit();
     } catch (e: any) {
       creatingRef.current.delete(propertyId);
-      return { ok: false, message: e?.code === 'firestore/permission-denied' ? 'Not allowed to delete this property.' : 'Could not delete. Check your connection and try again.' };
+      return {
+        ok: false,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'Not allowed to delete this property.'
+            : 'Could not delete. Check your connection and try again.',
+      };
     }
 
     // Remove it from this admin's list only AFTER the delete succeeded.
     removePropertyFromCurrentAdmin(propertyId);
     return { ok: true };
   };
+
   const addRoom = (propertyId: string, floor: number, roomNumber: string, capacity: number): Room => {
     const newRoom: Room = { id: `${propertyId}-${roomNumber}`, propertyId, floor, roomNumber, capacity };
     setDoc(doc(db, 'rooms', newRoom.id), newRoom).catch(warn('addRoom:'));
@@ -1277,6 +1425,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         complaintNotifications,
         properties: isAdminSession ? adminProps : publicProps,
         publicProperties: publicProps,
+        activePropertyId: activeId,
+        activeProperty: adminProps.find((p) => p.id === activeId),
+        setActiveProperty,
         rooms,
         archivedResidents,
         markRentPaid,
@@ -1302,6 +1453,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         clearIdentityDocumentUri,
         addDailyGuest,
         recordDailyGuestPayment,
+        updateDailyGuest,
+        uploadDailyGuestImage,
         addProperty,
         updatePropertyDetails,
         addPropertyImages,

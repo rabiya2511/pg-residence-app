@@ -21,11 +21,13 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { AdminResident, Room, Property, MONTHLY_RENT_BY_CAPACITY } from '../../constants/mockData';
-import { useAdmin, isDailyGuestActiveNow, ArchivedResident } from '../../context/AdminContext';
+import { useAdmin, isDailyGuestActiveNow, isPreBookedNow, ArchivedResident } from '../../context/AdminContext';
 import { exportResidentsToExcel } from '../../services/exportResidentsToExcel';
 
 const WHATSAPP_GREEN = '#25D366';
 const AVATAR_ORANGE = '#F59E0B';
+const PREBOOK_BG = '#EDE9FE';
+const PREBOOK_TEXT = '#6D28D9';
 const MONTHS_3 = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 const statusColors: Record<string, { bg: string; text: string }> = {
@@ -35,7 +37,7 @@ const statusColors: Record<string, { bg: string; text: string }> = {
 };
 
 type ViewMode = 'list' | 'rooms';
-type Filter = 'active' | 'all' | 'archived' | 'male' | 'female' | 'vacating' | 'due';
+type Filter = 'active' | 'prebooked' | 'all' | 'archived' | 'male' | 'female' | 'vacating' | 'due';
 type Entry = { resident: AdminResident | ArchivedResident; archived: boolean };
 
 type Occupant = {
@@ -84,9 +86,12 @@ function handleWhatsApp(phone: string, text?: string) {
   });
 }
 
-// A reminder when rent is due, a plain chat otherwise.
+// True when a rent reminder makes sense: rent is unpaid and the resident has actually joined.
+const needsRentReminder = (r: AdminResident) => r.rentStatus !== 'Paid' && !isPreBookedNow(r);
+
+// A reminder when rent is due, a plain chat otherwise (pre-booked residents just get a chat).
 function messageResident(resident: AdminResident, roomNumber: string, properties: Property[]) {
-  if (resident.rentStatus !== 'Paid') {
+  if (needsRentReminder(resident)) {
     const pg = getPropertyName(properties, resident.propertyId);
     handleWhatsApp(
       resident.phone,
@@ -153,6 +158,7 @@ function ResidentCard({
   const roomNumber = room?.roomNumber ?? 'Unassigned';
   const rent = statusColors[resident.rentStatus] ?? statusColors.Pending;
   const vacating = !!resident.vacatingDate;
+  const preBooked = isPreBookedNow(resident);
 
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={onPress}>
@@ -165,13 +171,24 @@ function ResidentCard({
           <View style={styles.roomTag}>
             <Text style={styles.roomTagText}>{room ? `R${roomNumber}` : 'N/A'}</Text>
           </View>
-          <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
-            {room ? `${room.capacity} Sharing` : 'No room'} · {vacating ? `Vacating ${resident.vacatingDate}` : 'Active'}
+          <Text style={[typography.caption, { color: colors.textMuted, flex: 1 }]} numberOfLines={1}>
+            {room ? `${room.capacity} Sharing` : 'No room'} ·{' '}
+            {vacating
+              ? `Vacating ${resident.vacatingDate}`
+              : preBooked
+              ? `Pre-booked · joins ${resident.joiningDate}`
+              : 'Active'}
           </Text>
         </View>
-        <View style={[styles.rentPill, { backgroundColor: rent.bg }]}>
-          <Text style={[typography.caption, { color: rent.text, fontWeight: '700' }]}>Rent {resident.rentStatus}</Text>
-        </View>
+        {preBooked ? (
+          <View style={[styles.rentPill, { backgroundColor: PREBOOK_BG }]}>
+            <Text style={[typography.caption, { color: PREBOOK_TEXT, fontWeight: '700' }]}>Pre-booked</Text>
+          </View>
+        ) : (
+          <View style={[styles.rentPill, { backgroundColor: rent.bg }]}>
+            <Text style={[typography.caption, { color: rent.text, fontWeight: '700' }]}>Rent {resident.rentStatus}</Text>
+          </View>
+        )}
       </View>
       <TouchableOpacity style={styles.roundIcon} onPress={() => handleCall(resident.phone)}>
         <Ionicons name="call" size={18} color={colors.primary} />
@@ -314,6 +331,7 @@ function RoomCard({
                 <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
                   {bed.name}
                   {bed.kind === 'guest' ? '  · Day Guest' : ''}
+                  {bed.resident && isPreBookedNow(bed.resident) ? '  · Pre-booked' : ''}
                 </Text>
                 <Text style={[typography.caption, { color: colors.textMuted }]}>{bed.phone}</Text>
               </View>
@@ -385,15 +403,16 @@ export default function AdminResidentsScreen() {
   const unreadCount =
     paymentNotifications.filter((n) => !n.read).length + vacateNotifications.filter((n) => !n.read).length;
 
-  // ----- filter counts -----
+  // ----- filter counts (pre-booked residents are not "active" until their joining date) -----
   const counts = {
-    active: residents.length,
+    active: residents.filter((r) => !isPreBookedNow(r)).length,
+    prebooked: residents.filter((r) => isPreBookedNow(r)).length,
     all: residents.length + archivedResidents.length,
     archived: archivedResidents.length,
     male: residents.filter((r) => isGender(r, 'male')).length,
     female: residents.filter((r) => isGender(r, 'female')).length,
     vacating: residents.filter((r) => !!r.vacatingDate).length,
-    due: residents.filter((r) => r.rentStatus !== 'Paid').length,
+    due: residents.filter((r) => r.rentStatus !== 'Paid' && !isPreBookedNow(r)).length,
   };
 
   const matchesSearch = (r: AdminResident, roomNumber: string) => {
@@ -407,9 +426,13 @@ export default function AdminResidentsScreen() {
     );
   };
 
-  // Does an ACTIVE resident pass the selected chip?
+  // Does an ACTIVE-list resident pass the selected chip?
   const passesFilter = (r: AdminResident) => {
     switch (effectiveFilter) {
+      case 'active':
+        return !isPreBookedNow(r);
+      case 'prebooked':
+        return isPreBookedNow(r);
       case 'male':
         return isGender(r, 'male');
       case 'female':
@@ -417,7 +440,7 @@ export default function AdminResidentsScreen() {
       case 'vacating':
         return !!r.vacatingDate;
       case 'due':
-        return r.rentStatus !== 'Paid';
+        return r.rentStatus !== 'Paid' && !isPreBookedNow(r);
       default:
         return true;
     }
@@ -451,6 +474,7 @@ export default function AdminResidentsScreen() {
           a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true })
       )
       .map((room) => {
+        // Pre-booked residents keep their bed reserved, so they are included here.
         const roomResidents = residents.filter((r) => r.roomId === room.id);
         const guests = dailyGuests.filter((g) => g.roomId === room.id && isDailyGuestActiveNow(g));
         const occupants: Occupant[] = [
@@ -484,7 +508,7 @@ export default function AdminResidentsScreen() {
       })
       .filter((c: any) => {
         // Resident chips only keep rooms that contain a matching resident.
-        if (['male', 'female', 'vacating', 'due'].includes(effectiveFilter)) {
+        if (['prebooked', 'male', 'female', 'vacating', 'due'].includes(effectiveFilter)) {
           if (!c.roomResidents.some(passesFilter)) return false;
         }
         if (!q) return true;
@@ -528,7 +552,13 @@ export default function AdminResidentsScreen() {
     }
     try {
       setExporting(true);
-      const label = filterRentStatus ? 'PendingRent' : effectiveFilter === 'archived' ? 'Archived' : effectiveFilter === 'all' ? 'All' : 'Active';
+      const label = filterRentStatus
+        ? 'PendingRent'
+        : effectiveFilter === 'archived'
+        ? 'Archived'
+        : effectiveFilter === 'all'
+        ? 'All'
+        : 'Active';
       const result = await exportResidentsToExcel({
         residents: list,
         rooms,
@@ -605,6 +635,7 @@ export default function AdminResidentsScreen() {
   // ----- header (toggle, search, chips) -----
   const CHIPS: { key: Filter; label: string }[] = [
     { key: 'active', label: `Active (${counts.active})` },
+    { key: 'prebooked', label: `Pre-booked (${counts.prebooked})` },
     { key: 'all', label: `All Records (${counts.all})` },
     { key: 'archived', label: `Archived (${counts.archived})` },
     { key: 'male', label: `Male (${counts.male})` },
@@ -696,6 +727,8 @@ export default function AdminResidentsScreen() {
             <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
               {effectiveFilter === 'archived'
                 ? 'No archived residents. Residents you archive will appear here so you can restore them later.'
+                : effectiveFilter === 'prebooked' && !search
+                ? 'No pre-booked residents. Residents booked ahead of their joining date will appear here.'
                 : search
                 ? 'No residents match your search.'
                 : 'No residents in this list yet.'}
@@ -776,7 +809,7 @@ export default function AdminResidentsScreen() {
               },
               {
                 icon: 'logo-whatsapp',
-                label: menuTarget?.rentStatus !== 'Paid' ? 'Send Rent Reminder' : 'WhatsApp Chat',
+                label: menuTarget && needsRentReminder(menuTarget) ? 'Send Rent Reminder' : 'WhatsApp Chat',
                 color: WHATSAPP_GREEN,
                 onPress: () => messageResident(menuTarget!, getRoomNumber(rooms, menuTarget!.roomId), properties),
               },

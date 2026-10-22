@@ -21,15 +21,14 @@ import { useMockAuth } from '../../context/MockAuthContext';
 // Demo logins: these are the test phone numbers saved in Firebase Console
 // (Authentication > Sign-in method > Phone > Phone numbers for testing).
 // Tapping one signs in through the normal Firebase phone login, so the real data loads.
-// They are only shown while developing (__DEV__), never in a release build.
+// Set SHOW_DEMO_LOGINS to false before you give the app to real users:
+// the demo buttons sign in to real accounts of your Firebase project.
+const SHOW_DEMO_LOGINS = true;
 const DEMO_OTP = '123456';
 const DEMO_LOGINS = [
   { label: 'Demo Admin', phone: '98765 43210', icon: 'business-outline' },
   { label: 'Demo Resident', phone: '99999 99999', icon: 'person-outline' },
 ] as const;
-
-// TEMPORARY: show demo logins in release builds. Set back to __DEV__ before sharing the app.
-const SHOW_DEMO_LOGINS = true; // normally: __DEV__
 
 export default function PhoneLoginScreen() {
   const navigation = useNavigation<any>();
@@ -123,7 +122,7 @@ export default function PhoneLoginScreen() {
 
           {SHOW_DEMO_LOGINS && (
             <View style={styles.demoBox}>
-              <Text style={[typography.caption, styles.demoTitle]}>DEMO LOGINS (testing only)</Text>
+              <Text style={[typography.caption, styles.demoTitle]}>DEMO LOGINS</Text>
               <View style={styles.demoRow}>
                 {DEMO_LOGINS.map((d) => (
                   <TouchableOpacity

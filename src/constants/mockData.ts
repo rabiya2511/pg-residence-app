@@ -759,7 +759,7 @@ export const initialRooms: Room[] = [
 
 export const DAILY_GUEST_RATE = 600;
 export type AdminDailyGuestPaymentStatus = 'Paid' | 'Pending';
-export type AdminDailyGuestPaymentMethod = 'Cash' | 'UPI';
+export type AdminDailyGuestPaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Bank Transfer';
 // Emergency Vacate deduction tiers: % of security deposit cut, based on how
 // many days' notice the resident gave before their chosen vacating date.
 // Sorted descending by minDays — the first matching tier (fewest days
@@ -801,7 +801,41 @@ export type AdminDailyGuest = {
   advanceAmount: number;
   paymentStatus: AdminDailyGuestPaymentStatus;
   paymentMethod: AdminDailyGuestPaymentMethod | null;
+  profileImageUri?: string | null;
+  guardianName?: string;
+  guardianPhone?: string;
+  idDocType?: string;
+  idDocNumber?: string;
+  officeIdType?: string;
+  officeIdCode?: string;
+  officeIdUri?: string | null;
+  bedNumber?: number;
+  vehicleType?: 'Bicycle' | 'Two-Wheeler' | 'Four-Wheeler';
+  vehicleNumber?: string;
+  vehicleModel?: string;
+  paymentReference?: string;
+  // new in this version
+  isPreBooking?: boolean;
+  securityDeposit?: number;
+  advanceDepositStatus?: 'Paid' | 'Not Paid' | 'No Advance';
+    // Daily Base version
+  emergencyContact?: string;
+  permanentAddress?: string;
+  dailyRate?: number;
+  discount?: number;
+  notes?: string;
+  collegeIdUri?: string | null;
+  otherDocUri?: string | null;
+  depositPaid?: number;
+  depositRefunded?: boolean;
+  depositRefundedOn?: string;
+  payments?: { amount: number; method: string; at: number }[];
+  extendedDays?: number;
+  checkedOut?: boolean;
+  checkedOutOn?: string;
+  checkedOutAt?: number;
 };
+
 
 export const adminDailyGuests: AdminDailyGuest[] = [];
 

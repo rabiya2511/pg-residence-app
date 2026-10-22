@@ -18,7 +18,7 @@ import { typography } from '../../constants/typography';
 import { AdminResident } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
-
+import {isPreBookedNow} from '../../context/AdminContext'
 type View_ = 'rooms' | 'defaulters';
 type Bucket = 'All' | 'Over30' | 'From15To30' | 'Recent';
 
@@ -83,7 +83,7 @@ export default function AdminPendingDuesScreen() {
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
     return residents
-      .filter((r) => r.rentStatus !== 'Paid')
+        .filter((r) => r.rentStatus !== 'Paid' && !isPreBookedNow(r))
       .map((r) => {
         const room = rooms.find((rm) => rm.id === r.roomId);
         const unpaid = paymentRecords.filter((p) => p.residentId === r.id && p.status !== 'Paid');
