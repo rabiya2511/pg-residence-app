@@ -7,7 +7,6 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
-import SwitchBranchSheet from './SwitchBranchSheet';
 
 const initialsOf = (name: string) =>
   name
@@ -21,7 +20,6 @@ export default function AdminPropertiesScreen() {
   const navigation = useNavigation<any>();
   const { properties, deleteProperty, activeProperty, setActiveProperty } = useAdmin();
   const [query, setQuery] = useState('');
-  const [switchVisible, setSwitchVisible] = useState(false);
 
   const activeId = activeProperty?.id;
 
@@ -119,14 +117,8 @@ export default function AdminPropertiesScreen() {
 
         <View style={styles.listHeader}>
           <Text style={[typography.bodyBold, { color: colors.text }]}>Configured Properties ({filtered.length})</Text>
-          <TouchableOpacity style={styles.switchBtn} activeOpacity={0.85} onPress={() => setSwitchVisible(true)}>
-            <Ionicons name="swap-horizontal" size={16} color={colors.primary} />
-            <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginLeft: 4 }]}>Switch Branch</Text>
-          </TouchableOpacity>
+          <Text style={[typography.caption, { color: colors.textMuted }]}>Tap card to set as Active</Text>
         </View>
-        <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.sm }]}>
-          Tap a card to set it as Active
-        </Text>
 
         {/* ---------------- Property cards ---------------- */}
         {filtered.map((property) => {
@@ -291,19 +283,15 @@ export default function AdminPropertiesScreen() {
               <Text style={[styles.logoText, { fontSize: 16 }]}>{initialsOf(activeProperty.name)}</Text>
             </View>
           )}
-          <TouchableOpacity
-            style={{ flex: 1, marginHorizontal: spacing.sm }}
-            activeOpacity={0.8}
-            onPress={() => setSwitchVisible(true)}
-          >
-            <Text style={styles.infoLabel}>SELECTED ACTIVE BRANCH ⇅</Text>
+          <View style={{ flex: 1, marginHorizontal: spacing.sm }}>
+            <Text style={styles.infoLabel}>SELECTED ACTIVE BRANCH</Text>
             <Text style={[typography.bodyBold, { color: colors.text, marginTop: 2 }]} numberOfLines={1}>
               {activeProperty.name}
             </Text>
             <Text style={[typography.caption, { color: colors.primary }]} numberOfLines={1}>
               {activeProperty.addressDetails?.city ? `${activeProperty.addressDetails.city} • ` : ''}ID: {activeProperty.id.slice(0, 8)}
             </Text>
-          </TouchableOpacity>
+          </View>
           <TouchableOpacity style={styles.dashButton} activeOpacity={0.85} onPress={openDashboard}>
             <Ionicons name="grid" size={18} color={colors.white} />
             <Text style={[typography.button, { color: colors.white, marginHorizontal: 6 }]}>Dashboard</Text>
@@ -311,17 +299,6 @@ export default function AdminPropertiesScreen() {
           </TouchableOpacity>
         </View>
       )}
-
-      <SwitchBranchSheet
-        visible={switchVisible}
-        onClose={() => setSwitchVisible(false)}
-        properties={properties}
-        activeId={activeId}
-        onPick={(id) => {
-          setActiveProperty(id);
-          setSwitchVisible(false);
-        }}
-      />
     </SafeAreaView>
   );
 }
@@ -400,17 +377,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
-  },
-
-  switchBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.primary,
-    backgroundColor: `${colors.primary}12`,
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
   },
 
   card: {

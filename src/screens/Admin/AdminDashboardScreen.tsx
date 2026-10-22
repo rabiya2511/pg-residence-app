@@ -68,8 +68,14 @@ export default function AdminDashboardScreen() {
     vacateNotifications,
     properties,
     rooms,
+    activeProperty,
+    setActiveProperty,
   } = useAdmin();
   const [qrModalVisible, setQrModalVisible] = useState(false);
+  const [switchVisible, setSwitchVisible] = useState(false);
+
+  // Everything from useAdmin() is already for the active branch only.
+  const activeId = activeProperty?.id;
   const [showAllActions, setShowAllActions] = useState(false);
 
   /* ------------------------- existing numbers ------------------------- */
@@ -114,7 +120,7 @@ export default function AdminDashboardScreen() {
   const vacantRooms = roomStats.filter((r) => r.occupied === 0).length;
   const partialRooms = rooms.length - fullRooms - vacantRooms;
   const occupiedRooms = rooms.length - vacantRooms;
-  const totalFloors = new Set(rooms.map((r) => r.floor)).size;
+  const totalFloors = activeProperty?.floors ?? new Set(rooms.map((r) => r.floor)).size;
 
   const preBookedCount = adminResidents.filter((r) => isPreBookedNow(r)).length;
 
@@ -159,19 +165,24 @@ export default function AdminDashboardScreen() {
     year: 'numeric',
   });
 
-  const propertyTitle =
-    properties.length === 0
-      ? 'No property yet'
-      : properties.length === 1
-      ? properties[0].name
-      : `${properties[0].name} +${properties.length - 1} more`;
+  const propertyTitle = activeProperty?.name ?? 'No property yet';
 
   const handleAddRoom = () => {
-    if (properties.length === 1) {
-      navigation.navigate('AdminRoomForm', { propertyId: properties[0].id });
+    if (activeProperty) {
+      navigation.navigate('AdminRoomForm', { propertyId: activeProperty.id });
     } else {
       navigation.navigate('AdminProperties');
     }
+  };
+
+  const closeSwitch = () => setSwitchVisible(false);
+  const pickBranch = (id: string) => {
+    setActiveProperty(id);
+    closeSwitch();
+  };
+  const openManageProperties = () => {
+    closeSwitch();
+    navigation.navigate('AdminProperties');
   };
 
   /* ------------------------- quick actions (all existing tabs kept) ------------------------- */
@@ -204,11 +215,14 @@ export default function AdminDashboardScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* ---------------- Header ---------------- */}
       <View style={styles.header}>
-        <Image source={require('../../../assets/pg-logo.png')} style={styles.logo} />
+        <Image
+          source={activeProperty?.logoUri ? { uri: activeProperty.logoUri } : require('../../../assets/pg-logo.png')}
+          style={styles.logo}
+        />
         <TouchableOpacity
           style={{ flex: 1 }}
           activeOpacity={0.8}
-          onPress={() => navigation.navigate('AdminProperties')}
+          onPress={() => setSwitchVisible(true)}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Text style={[typography.heading3, { color: colors.text, flexShrink: 1 }]} numberOfLines={1}>
@@ -220,7 +234,7 @@ export default function AdminDashboardScreen() {
             {totalFloors} Floor{totalFloors !== 1 ? 's' : ''} · {rooms.length} Rooms
           </Text>
           <Text style={[typography.caption, { color: colors.primary, fontWeight: '600' }]} numberOfLines={1}>
-            Admin · Tap to manage properties
+            Admin · Tap to switch
           </Text>
         </TouchableOpacity>
         <View style={styles.headerIcons}>
@@ -526,6 +540,68 @@ export default function AdminDashboardScreen() {
         </View>
       </ScrollView>
 
+      {/* ---------------- Switch Branch sheet ---------------- */}
+      <Modal visible={switchVisible} transparent animationType="slide" onRequestClose={closeSwitch}>
+        <TouchableOpacity style={styles.sheetOverlay} activeOpacity={1} onPress={closeSwitch}>
+          <TouchableOpacity activeOpacity={1} style={styles.branchSheet} onPress={() => {}}>
+            <View style={styles.modalHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[typography.heading3, { color: colors.text }]}>Switch Branch</Text>
+                <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
+                  Select active property for Admin Portal
+                </Text>
+              </View>
+              <TouchableOpacity onPress={closeSwitch} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 320, marginTop: spacing.md }} showsVerticalScrollIndicator={false}>
+              {properties.length === 0 && (
+                <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', padding: spacing.md }]}>
+                  No properties yet.
+                </Text>
+              )}
+              {properties.map((p) => {
+                const isActive = p.id === activeId;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.branchRow, isActive && styles.branchRowActive]}
+                    activeOpacity={0.85}
+                    onPress={() => pickBranch(p.id)}
+                  >
+                    <Image
+                      source={p.logoUri ? { uri: p.logoUri } : require('../../../assets/pg-logo.png')}
+                      style={styles.branchLogo}
+                    />
+                    <View style={{ flex: 1, marginHorizontal: spacing.sm }}>
+                      <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>{p.name}</Text>
+                      <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+                        {[p.address, p.floors ? `${p.floors} Floor${p.floors !== 1 ? 's' : ''}` : null].filter(Boolean).join(' • ')}
+                      </Text>
+                      <Text style={[typography.caption, { color: colors.primary, fontWeight: '600' }]} numberOfLines={1}>
+                        Manager: {p.branchManager ?? 'Unassigned'}{p.contactPhone ? ` (${p.contactPhone})` : ''}
+                      </Text>
+                    </View>
+                    {isActive && (
+                      <View style={styles.activeBadge}>
+                        <Text style={styles.activeBadgeText}>ACTIVE</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <TouchableOpacity style={styles.manageButton} activeOpacity={0.85} onPress={openManageProperties}>
+              <Ionicons name="settings" size={18} color={colors.white} />
+              <Text style={[typography.button, { color: colors.white, marginLeft: spacing.xs }]}>Manage All Properties</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ---------------- Payment QR ---------------- */}
       <Modal visible={qrModalVisible} transparent animationType="fade" onRequestClose={() => setQrModalVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setQrModalVisible(false)}>
@@ -729,6 +805,37 @@ const styles = StyleSheet.create({
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.lg },
   modalSheet: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md },
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  branchSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  branchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  branchRowActive: { borderColor: colors.primary, borderWidth: 2, backgroundColor: `${colors.primary}15` },
+  branchLogo: { width: 48, height: 48, borderRadius: radius.sm },
+  activeBadge: { backgroundColor: colors.primary, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 4 },
+  activeBadgeText: { color: colors.white, fontSize: 11, fontWeight: '800' },
+  manageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    marginTop: spacing.md,
+  },
   modalHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   qrCard: {
     backgroundColor: colors.background,

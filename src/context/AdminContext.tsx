@@ -824,7 +824,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     };
     setDoc(
       doc(db, 'complaints', id),
-      clean({ ...newComplaint, propertyId, createdAt: Date.now() })
+      // residentPhone is kept on the complaint so the admin can still WhatsApp the resident
+      // even if the resident record is later removed.
+      clean({ ...newComplaint, propertyId, residentPhone: resident?.phone ?? null, createdAt: Date.now() })
     ).catch(warn('addComplaint:'));
 
     pushNotification(

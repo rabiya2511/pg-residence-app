@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute } from '@react-navigation/native';
+import { getFirestore, doc, getDoc } from '@react-native-firebase/firestore';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
@@ -85,7 +86,7 @@ function ComplaintCard({
 export default function AdminComplaintsScreen() {
   const route = useRoute<any>();
   const filterStatus: AdminComplaint['status'] | undefined = route.params?.filterStatus;
-  const { complaints, residents, rooms, updateComplaintStatus, markComplaintViewed, addComplaint } = useAdmin();
+  const { complaints, residents, rooms, properties, activeProperty, updateComplaintStatus, markComplaintViewed, addComplaint } = useAdmin();
 
   const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [whatsappRecipients, setWhatsappRecipients] = useState<WhatsAppRecipient[]>([]);
@@ -148,19 +149,44 @@ export default function AdminComplaintsScreen() {
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Confirm',
-        onPress: () => {
+        onPress: async () => {
           updateComplaintStatus(complaint.id, newStatus);
+
+          const norm = (v: any) => String(v ?? '').trim().toLowerCase();
+          const cAny = complaint as any;
+          const resident =
+            residents.find((r) => cAny.residentId && r.id === cAny.residentId) ||
+            residents.find((r) => norm(r.name) === norm(complaint.residentName) && norm(roomNumberOf(r.roomId)) === norm(complaint.room)) ||
+            residents.find((r) => norm(r.name) === norm(complaint.residentName));
+          // Not in the loaded list (e.g. moved out / archived)? Read the record straight from Firestore.
+          let fetched: any = null;
+          if (!resident && cAny.residentId) {
+            try {
+              const snap: any = await getDoc(doc(getFirestore(), 'residents', cAny.residentId));
+              const ok = typeof snap.exists === 'function' ? snap.exists() : snap.exists;
+              if (ok) fetched = snap.data();
+            } catch {
+              // admin may not have access; fall through
+            }
+          }
+          const phone = resident?.phone || fetched?.phone || cAny.residentPhone || cAny.phone || '';
+          const pgName =
+            properties.find((p) => p.id === (resident?.propertyId || fetched?.propertyId || cAny.propertyId))?.name ??
+            activeProperty?.name ??
+            'your PG';
+          if (__DEV__) console.log('[WhatsApp] complaint', complaint.id, 'resident found:', !!resident, 'fetched:', !!fetched, 'phone:', phone, 'keys:', Object.keys(cAny).join(','));
 
           const statusMessages: Record<AdminComplaint['status'], string> = {
             Open: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been reopened. Our team will look into it.`,
             'In Progress': `Hi ${complaint.residentName}, your complaint (${complaint.category}) is now being worked on. We'll update you once resolved.`,
-            Resolved: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been marked as resolved. Please let us know if the issue persists. — Lokansh Aditya PG Residency`,
+            Resolved: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been marked as resolved. Please let us know if the issue persists. — ${pgName}`,
           };
 
           setWhatsappRecipients([
             {
               id: complaint.id,
               name: complaint.residentName,
+              phone,
               message: statusMessages[newStatus],
             },
           ]);

@@ -18,7 +18,8 @@ import { typography } from '../../constants/typography';
 import { AdminResident } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
-import {isPreBookedNow} from '../../context/AdminContext'
+import { isPreBookedNow } from '../../context/AdminContext';
+import { openWhatsApp } from '../../utils/whatsapp';
 type View_ = 'rooms' | 'defaulters';
 type Bucket = 'All' | 'Over30' | 'From15To30' | 'Recent';
 
@@ -185,15 +186,14 @@ export default function AdminPendingDuesScreen() {
   const reminderRecipients: WhatsAppRecipient[] = filtered.map((d) => ({
     id: d.resident.id,
     name: d.resident.name,
+    phone: d.resident.phone,
     message: reminderMessage(d),
   }));
 
   const callResident = (phone: string) => Linking.openURL(`tel:${phone.replace(/\s/g, '')}`).catch(() => {});
 
   const whatsappResident = (d: Due) => {
-    let digits = (d.resident.phone ?? '').replace(/[^\d]/g, '');
-    if (digits.length === 10) digits = `91${digits}`;
-    Linking.openURL(`https://wa.me/${digits}?text=${encodeURIComponent(reminderMessage(d))}`).catch(() => {});
+    openWhatsApp(d.resident.phone ?? '', reminderMessage(d));
   };
 
   const handleMarkPaid = (d: Due) =>

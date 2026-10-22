@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-
-type SendStatus = 'pending' | 'sending' | 'delivered';
+import { openWhatsApp } from '../../utils/whatsapp';
 
 export type WhatsAppRecipient = {
   id: string;
   name: string;
   message: string;
+  /** Resident's phone number. Without it the message cannot be opened in WhatsApp. */
+  phone?: string | null;
 };
 
 type Props = {
@@ -20,98 +21,78 @@ type Props = {
   recipients: WhatsAppRecipient[];
 };
 
-const WHATSAPP_GREEN = '#25D366';
-const WHATSAPP_DARK = '#075E54';
-
+// Real hand-off to the WhatsApp installed on this phone: tapping "Send" opens that resident's
+// chat with the message already typed in. The admin presses WhatsApp's own send button.
 export default function WhatsAppNotifyModal({ visible, onClose, title, recipients }: Props) {
-  const [statuses, setStatuses] = useState<Record<string, SendStatus>>({});
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (!visible) return;
-
-    const initial: Record<string, SendStatus> = {};
-    recipients.forEach((r) => (initial[r.id] = 'pending'));
-    setStatuses(initial);
-
-    recipients.forEach((r, index) => {
-      setTimeout(() => {
-        setStatuses((prev) => ({ ...prev, [r.id]: 'sending' }));
-      }, index * 500);
-      setTimeout(() => {
-        setStatuses((prev) => ({ ...prev, [r.id]: 'delivered' }));
-      }, index * 500 + 700);
-    });
+    if (visible) setOpened({});
   }, [visible, recipients]);
 
-  const allDelivered = recipients.length > 0 && recipients.every((r) => statuses[r.id] === 'delivered');
+  const send = async (r: WhatsAppRecipient) => {
+    const ok = await openWhatsApp(r.phone ?? '', r.message);
+    if (ok) setOpened((prev) => ({ ...prev, [r.id]: true }));
+  };
+
+  const doneCount = recipients.filter((r) => opened[r.id]).length;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.sheet}>
           <View style={styles.header}>
-            <Ionicons name="logo-whatsapp" size={22} color={colors.white} />
-            <Text style={[typography.bodyBold, { color: colors.white, marginLeft: spacing.sm, flex: 1 }]}>
-              {title}
-            </Text>
-            <TouchableOpacity onPress={onClose}>
+            <Ionicons name="logo-whatsapp" size={20} color={colors.white} />
+            <Text style={[typography.bodyBold, { color: colors.white, flex: 1, marginLeft: spacing.sm }]}>{title}</Text>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Ionicons name="close" size={22} color={colors.white} />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.testModeBanner}>
-            <Ionicons name="information-circle-outline" size={16} color={colors.warning} />
-            <Text style={[typography.caption, { color: colors.warning, marginLeft: 4 }]}>
-              Simulation only — no real messages are sent
+          <View style={styles.info}>
+            <Ionicons name="information-circle-outline" size={15} color="#075E54" />
+            <Text style={styles.infoText}>
+              Tap Send to open WhatsApp with the message ready, then press send there.
+              {recipients.length > 1 ? ` (${doneCount}/${recipients.length} opened)` : ''}
             </Text>
           </View>
 
-          <ScrollView style={styles.list} contentContainerStyle={{ padding: spacing.md }}>
-            {recipients.length === 0 ? (
-              <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.lg }]}>
-                No recipients.
-              </Text>
-            ) : (
-              recipients.map((r) => {
-                const status = statuses[r.id] ?? 'pending';
-                return (
-                  <View key={r.id} style={styles.residentRow}>
-                    <View style={styles.avatarWrap}>
-                      <Ionicons name="person" size={18} color={colors.primary} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[typography.bodyBold, { color: colors.text }]}>{r.name}</Text>
-                      <View style={styles.bubble}>
-                        <Text style={[typography.caption, { color: colors.text }]}>{r.message}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.statusWrap}>
-                      {status === 'pending' && (
-                        <Ionicons name="time-outline" size={16} color={colors.textMuted} />
-                      )}
-                      {status === 'sending' && <ActivityIndicator size="small" color={WHATSAPP_GREEN} />}
-                      {status === 'delivered' && (
-                        <Ionicons name="checkmark-done" size={18} color={WHATSAPP_GREEN} />
-                      )}
-                    </View>
-                  </View>
-                );
-              })
+          <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ padding: spacing.md }}>
+            {recipients.length === 0 && (
+              <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center' }]}>No one to notify.</Text>
             )}
+            {recipients.map((r) => (
+              <View key={r.id} style={styles.item}>
+                <View style={styles.itemTop}>
+                  <View style={styles.avatar}>
+                    <Ionicons name="person" size={16} color={colors.primary} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                    <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>{r.name}</Text>
+                    <Text style={[typography.caption, { color: r.phone ? colors.textMuted : colors.error }]}>
+                      {r.phone || 'No phone number saved'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.sendBtn, !r.phone && { opacity: 0.45 }, opened[r.id] && styles.sendBtnDone]}
+                    disabled={!r.phone}
+                    activeOpacity={0.85}
+                    onPress={() => send(r)}
+                  >
+                    <Ionicons name={opened[r.id] ? 'checkmark' : 'logo-whatsapp'} size={15} color={colors.white} />
+                    <Text style={styles.sendText}>{opened[r.id] ? 'Opened' : 'Send'}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.bubble}>
+                  <Text style={{ color: '#111', fontSize: 13 }}>{r.message}</Text>
+                </View>
+              </View>
+            ))}
           </ScrollView>
 
-          <View style={styles.footer}>
-            <TouchableOpacity
-              style={[styles.doneButton, !allDelivered && recipients.length > 0 && styles.doneButtonDisabled]}
-              activeOpacity={0.85}
-              onPress={onClose}
-              disabled={!allDelivered && recipients.length > 0}
-            >
-              <Text style={[typography.button, { color: colors.white }]}>
-                {recipients.length === 0 ? 'Close' : allDelivered ? 'Done' : 'Sending...'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity style={styles.done} activeOpacity={0.85} onPress={onClose}>
+            <Text style={[typography.button, { color: colors.white }]}>Done</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -119,75 +100,17 @@ export default function WhatsAppNotifyModal({ visible, onClose, title, recipient
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.background,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    maxHeight: '80%',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: WHATSAPP_DARK,
-    padding: spacing.md,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-  },
-  testModeBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  list: {
-    flexGrow: 0,
-  },
-  residentRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: spacing.md,
-  },
-  avatarWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
-  },
-  bubble: {
-    backgroundColor: '#DCF8C6',
-    borderRadius: radius.md,
-    borderTopLeftRadius: 4,
-    padding: spacing.sm,
-    marginTop: 4,
-  },
-  statusWrap: {
-    width: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  footer: {
-    padding: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  doneButton: {
-    backgroundColor: WHATSAPP_GREEN,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-  },
-  doneButtonDisabled: {
-    opacity: 0.6,
-  },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: colors.surface, borderTopLeftRadius: 16, borderTopRightRadius: 16, overflow: 'hidden', paddingBottom: spacing.lg },
+  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#075E54', padding: spacing.md },
+  info: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E7F8EE', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 6 },
+  infoText: { flex: 1, fontSize: 12, color: '#075E54' },
+  item: { marginBottom: spacing.md },
+  itemTop: { flexDirection: 'row', alignItems: 'center' },
+  avatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  sendBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#25D366', borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: 7, gap: 5 },
+  sendBtnDone: { backgroundColor: colors.textMuted },
+  sendText: { color: colors.white, fontWeight: '700', fontSize: 12 },
+  bubble: { backgroundColor: '#DCF8C6', borderRadius: 10, padding: spacing.sm, marginTop: spacing.xs, marginLeft: 40 },
+  done: { backgroundColor: '#25D366', borderRadius: radius.md, marginHorizontal: spacing.md, paddingVertical: spacing.md, alignItems: 'center' },
 });
