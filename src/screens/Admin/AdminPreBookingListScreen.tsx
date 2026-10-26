@@ -7,6 +7,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 export default function AdminPreBookingListScreen() {
   const navigation = useNavigation<any>();
@@ -62,7 +63,7 @@ export default function AdminPreBookingListScreen() {
                       onPress={() => navigation.navigate('AdminDailyGuestReceipt', { guestId: guest.id })}
                     >
                       <View style={styles.avatarWrap}>
-                        <Ionicons name="person" size={20} color={colors.primary} />
+                        <ResidentAvatar uri={guest.profileImageUri} name={guest.name} size={40} />
                       </View>
                       <View style={styles.content}>
                         <Text style={[typography.bodyBold, { color: colors.text }]}>{guest.name}</Text>
@@ -108,12 +109,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   avatarWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
     marginRight: spacing.sm,
   },
   content: { flex: 1 },

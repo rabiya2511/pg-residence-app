@@ -23,6 +23,7 @@ import { typography } from '../../constants/typography';
 import { AdminResident, Room, Property, MONTHLY_RENT_BY_CAPACITY } from '../../constants/mockData';
 import { useAdmin, isDailyGuestActiveNow, isPreBookedNow, ArchivedResident } from '../../context/AdminContext';
 import { exportResidentsToExcel } from '../../services/exportResidentsToExcel';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 const WHATSAPP_GREEN = '#25D366';
 const AVATAR_ORANGE = '#F59E0B';
@@ -128,15 +129,10 @@ function buildBeds(occupants: Occupant[], capacity: number): (Occupant | null)[]
 }
 
 // ───────────────────────── list cards ─────────────────────────
-
 function Avatar({ name, uri, muted }: { name: string; uri?: string | null; muted?: boolean }) {
   return (
-    <View style={[styles.avatar, muted && { backgroundColor: colors.textMuted }]}>
-      {uri ? (
-        <Image source={{ uri }} style={styles.avatarImage} />
-      ) : (
-        <Text style={[typography.bodyBold, { color: colors.white }]}>{initialOf(name)}</Text>
-      )}
+    <View style={muted ? { opacity: 0.5 } : undefined}>
+      <ResidentAvatar uri={uri} name={name} size={40} />
     </View>
   );
 }
@@ -379,6 +375,8 @@ export default function AdminResidentsScreen() {
     archiveResident,
     restoreResident,
     permanentlyDeleteResident,
+    updateResident,
+    transferResidentRoom,
     rooms,
     properties,
     dailyGuests,
@@ -392,11 +390,14 @@ export default function AdminResidentsScreen() {
   const [search, setSearch] = useState('');
   const [exporting, setExporting] = useState(false);
   const [menuTarget, setMenuTarget] = useState<AdminResident | null>(null);
-
   // Restore dialog state
   const [restoreTarget, setRestoreTarget] = useState<ArchivedResident | null>(null);
   const [restoreRoomId, setRestoreRoomId] = useState<string | null>(null);
   const [restoreRent, setRestoreRent] = useState('');
+  // Bed Replace dialog state
+  const [bedTarget, setBedTarget] = useState<AdminResident | null>(null);
+  const [bedRoomId, setBedRoomId] = useState<string | null>(null);
+  const [bedNumber, setBedNumber] = useState<number | null>(null);
 
   const effectiveFilter: Filter = filterRentStatus ? 'due' : filter;
 
@@ -542,6 +543,107 @@ export default function AdminResidentsScreen() {
         ),
     [rooms, residents, dailyGuests]
   );
+
+  // ----- Bed Replace helpers -----
+
+  // Everyone currently in a room: residents (pre-booked included) and checked-in day guests.
+  const occupantsOfRoom = (roomId: string): Occupant[] => [
+    ...residents
+      .filter((r) => r.roomId === roomId)
+      .map((r) => ({ key: `r_${r.id}`, kind: 'resident' as const, name: r.name, phone: r.phone, resident: r })),
+    ...dailyGuests
+      .filter((g) => g.roomId === roomId && isDailyGuestActiveNow(g))
+      .map((g) => ({ key: `g_${g.id}`, kind: 'guest' as const, name: g.name, phone: g.phone })),
+  ];
+
+  // Rooms the resident can move to: any room with a free bed, plus their own room (to switch beds).
+  const bedRooms = useMemo(() => {
+    if (!bedTarget) return [];
+    return rooms
+      .map((room) => {
+        const used =
+          residents.filter((r) => r.roomId === room.id).length +
+          dailyGuests.filter((g) => g.roomId === room.id && isDailyGuestActiveNow(g)).length;
+        return { room, free: room.capacity - used };
+      })
+      .filter((x) => x.free > 0 || x.room.id === bedTarget.roomId)
+      .sort(
+        (a, b) =>
+          a.room.propertyId.localeCompare(b.room.propertyId) ||
+          a.room.floor - b.room.floor ||
+          a.room.roomNumber.localeCompare(b.room.roomNumber, undefined, { numeric: true })
+      );
+  }, [bedTarget, rooms, residents, dailyGuests]);
+
+  // The beds of the room chosen in the dialog, as they look right now.
+  const bedLayout = useMemo(() => {
+    if (!bedTarget || !bedRoomId) return [] as (Occupant | null)[];
+    const room = rooms.find((r) => r.id === bedRoomId);
+    if (!room) return [];
+    return buildBeds(occupantsOfRoom(bedRoomId), room.capacity).slice(0, room.capacity);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bedTarget, bedRoomId, rooms, residents, dailyGuests]);
+
+  const currentBedOf = (resident: AdminResident): number | null => {
+    const room = rooms.find((r) => r.id === resident.roomId);
+    if (!room) return null;
+    const beds = buildBeds(occupantsOfRoom(resident.roomId), room.capacity);
+    const i = beds.findIndex((b) => b?.resident?.id === resident.id);
+    return i >= 0 ? i + 1 : null;
+  };
+
+  // Residents with no saved bed number get one now, matching what the admin sees today,
+  // so moving someone never silently shuffles the others.
+  const pinBeds = (roomId: string, exceptResidentId: string) => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room) return;
+    buildBeds(occupantsOfRoom(roomId), room.capacity).forEach((b, i) => {
+      if (b?.resident && b.resident.id !== exceptResidentId && !(b.resident as any).bedNumber) {
+        updateResident(b.resident.id, { bedNumber: i + 1 });
+      }
+    });
+  };
+
+  const openBedReplace = (resident: AdminResident) => {
+    setBedTarget(resident);
+    setBedRoomId(resident.roomId);
+    setBedNumber(null);
+  };
+
+  const closeBedReplace = () => {
+    setBedTarget(null);
+    setBedRoomId(null);
+    setBedNumber(null);
+  };
+
+  const handleConfirmBedReplace = () => {
+    if (!bedTarget) return;
+    const room = rooms.find((r) => r.id === bedRoomId);
+    if (!room) {
+      Alert.alert('Select a Room', 'Please choose the room to move to.');
+      return;
+    }
+    if (bedNumber === null) {
+      Alert.alert('Select a Bed', 'Please choose a bed.');
+      return;
+    }
+    const sameRoom = room.id === bedTarget.roomId;
+    if (sameRoom && currentBedOf(bedTarget) === bedNumber) {
+      Alert.alert('Already in This Bed', `${bedTarget.name} is already in Bed ${bedNumber} of Room ${room.roomNumber}.`);
+      return;
+    }
+
+    pinBeds(bedTarget.roomId, bedTarget.id);
+    if (!sameRoom) {
+      pinBeds(room.id, bedTarget.id);
+      transferResidentRoom(bedTarget.id, room.propertyId, room.id);
+    }
+    updateResident(bedTarget.id, { bedNumber });
+
+    const name = bedTarget.name;
+    closeBedReplace();
+    Alert.alert('Bed Updated', `${name} is now in Room ${room.roomNumber}, Bed ${bedNumber}.`);
+  };
 
   // ----- actions -----
   const handleExport = async () => {
@@ -696,6 +798,9 @@ export default function AdminResidentsScreen() {
     </View>
   );
 
+  const bedRoom = rooms.find((r) => r.id === bedRoomId);
+  const bedTargetCurrentBed = bedTarget ? currentBedOf(bedTarget) : null;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.headerRow}>
@@ -814,6 +919,19 @@ export default function AdminResidentsScreen() {
                 onPress: () => messageResident(menuTarget!, getRoomNumber(rooms, menuTarget!.roomId), properties),
               },
               {
+                icon: 'swap-horizontal-outline',
+                label: 'Bed Replace',
+                color: colors.text,
+                onPress: () => openBedReplace(menuTarget!),
+              },
+              {
+                icon: 'log-out-outline',
+                label: menuTarget?.vacatingDate ? 'Manage Vacate' : 'Vacate',
+                color: colors.text,
+                // Goes through the same Vacating flow used everywhere else (notice date, emergency deduction, checkout).
+                onPress: () => navigation.navigate('AdminVacating', { residentId: menuTarget!.id }),
+              },
+              {
                 icon: 'archive-outline',
                 label: 'Archive (can restore)',
                 color: colors.warning,
@@ -832,7 +950,8 @@ export default function AdminResidentsScreen() {
                 onPress={() => {
                   const action = item.onPress;
                   setMenuTarget(null);
-                  action();
+                  // Let the menu finish closing first, otherwise Android can swallow the navigation.
+                  setTimeout(action, 300);
                 }}
               >
                 <Ionicons name={item.icon as any} size={20} color={item.color} />
@@ -841,6 +960,112 @@ export default function AdminResidentsScreen() {
             ))}
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Bed Replace dialog */}
+      <Modal visible={!!bedTarget} transparent animationType="fade" onRequestClose={closeBedReplace}>
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={[typography.heading3, { color: colors.text }]}>Bed Replace</Text>
+              <TouchableOpacity onPress={closeBedReplace} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            {bedTarget && (
+              <Text style={[typography.body, { color: colors.textMuted, marginBottom: spacing.sm }]}>
+                {bedTarget.name} is in Room {getRoomNumber(rooms, bedTarget.roomId)}
+                {bedTargetCurrentBed ? `, Bed ${bedTargetCurrentBed}` : ''}. Choose the new room and bed.
+              </Text>
+            )}
+
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[typography.caption, styles.label]}>Room</Text>
+              <View style={styles.roomList}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {bedRooms.length === 0 && (
+                    <Text style={[typography.caption, { color: colors.textMuted, padding: spacing.md }]}>
+                      No rooms are available.
+                    </Text>
+                  )}
+                  {bedRooms.map(({ room, free }) => {
+                    const selected = room.id === bedRoomId;
+                    const isCurrent = room.id === bedTarget?.roomId;
+                    return (
+                      <TouchableOpacity
+                        key={room.id}
+                        style={[styles.roomOption, selected && styles.roomOptionSelected]}
+                        onPress={() => {
+                          setBedRoomId(room.id);
+                          setBedNumber(null);
+                        }}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
+                            Room {room.roomNumber}
+                            {isCurrent ? ' (current room)' : ''}
+                          </Text>
+                          <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+                            {getPropertyName(properties, room.propertyId)} · Floor {room.floor} · {room.capacity} Sharing ·{' '}
+                            {Math.max(0, free)} free
+                          </Text>
+                        </View>
+                        {selected && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {!!bedRoom && (
+                <>
+                  <Text style={[typography.caption, styles.label]}>Bed in Room {bedRoom.roomNumber}</Text>
+                  <View style={styles.bedChipRow}>
+                    {bedLayout.map((occupant, i) => {
+                      const n = i + 1;
+                      const isCurrent = !!occupant && occupant.resident?.id === bedTarget?.id;
+                      const taken = !!occupant && !isCurrent;
+                      const chosen = bedNumber === n;
+                      return (
+                        <TouchableOpacity
+                          key={n}
+                          disabled={taken}
+                          activeOpacity={0.8}
+                          onPress={() => setBedNumber(n)}
+                          style={[
+                            styles.bedChip,
+                            isCurrent && styles.bedChipCurrent,
+                            taken && styles.bedChipTaken,
+                            chosen && styles.bedChipChosen,
+                          ]}
+                        >
+                          <Text style={[typography.bodyBold, { color: chosen ? colors.white : colors.text }]}>Bed {n}</Text>
+                          <Text
+                            style={[typography.caption, { color: chosen ? colors.white : colors.textMuted }]}
+                            numberOfLines={1}
+                          >
+                            {isCurrent ? 'Current' : taken ? occupant!.name : 'Vacant'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.confirmButton, (!bedRoomId || bedNumber === null) && { opacity: 0.5 }]}
+              activeOpacity={0.85}
+              onPress={handleConfirmBedReplace}
+            >
+              <Text style={[typography.button, { color: colors.white }]}>
+                {bedNumber !== null ? `Move to Bed ${bedNumber}` : 'Select a Bed'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* Restore dialog */}
@@ -1101,4 +1326,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   confirmButton: { backgroundColor: colors.success, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center', marginTop: spacing.lg },
+
+  // bed replace
+  bedChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  bedChip: {
+    minWidth: 92,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.success,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+  },
+  bedChipCurrent: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
+  bedChipTaken: { borderColor: colors.border, backgroundColor: colors.background, opacity: 0.55 },
+  bedChipChosen: { backgroundColor: colors.primary, borderColor: colors.primary },
 });

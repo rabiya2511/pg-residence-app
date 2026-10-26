@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -83,7 +83,7 @@ type Selection =
 
 export default function AdminRevenueScreen() {
   const navigation = useNavigation();
-  const { residents, archivedResidents, paymentRecords, dailyGuests, rooms } = useAdmin();
+  const { residents, archivedResidents, paymentRecords, dailyGuests, rooms, clearRevenueData, restoreRevenueData } = useAdmin();
   const scrollRef = useRef<ScrollView>(null);
   const detailsY = useRef(0);
 
@@ -99,7 +99,7 @@ export default function AdminRevenueScreen() {
     const out: Txn[] = [];
 
     paymentRecords.forEach((p) => {
-      if (p.status !== 'Paid') return;
+      if (p.status !== 'Paid' || (p as any).revenueCleared) return;
       const d = parseAnyDate(p.paidOn);
       if (!d) return;
       const who = info.get(p.residentId);
@@ -124,8 +124,10 @@ export default function AdminRevenueScreen() {
       if (initial > 0) {
         listed.unshift({ amount: initial, method: g.paymentMethod, at: g.checkInTimestamp });
       }
+      const clearedAt = Number(g.revenueClearedAt) || 0;
       listed.forEach((pay, i) => {
         const at = Number(pay.at) || g.checkInTimestamp || Date.now();
+        if (clearedAt > 0 && at <= clearedAt) return; // hidden by "Clear data"
         out.push({
           id: `g_${g.id}_${i}`,
           key: dateKey(new Date(at)),
@@ -142,6 +144,42 @@ export default function AdminRevenueScreen() {
 
     return out.filter((t) => t.amount > 0);
   }, [residents, archivedResidents, paymentRecords, dailyGuests, rooms]);
+
+  /* ------------------------- clear / restore ------------------------- */
+  const handleClearData = () => {
+    Alert.alert(
+      'Revenue Data',
+      'Clear removes every payment received so far from this Monthly Revenue screen.\n\nRent records, pending dues and guest records are NOT deleted, and you can restore the cleared data any time.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Restore Cleared',
+          onPress: async () => {
+            const res = await restoreRevenueData();
+            if (!res.ok) Alert.alert('Could Not Restore', res.message ?? 'Please try again.');
+            else Alert.alert('Restored', res.count > 0 ? 'The cleared revenue data is back.' : 'Nothing was cleared.');
+          },
+        },
+        {
+          text: 'Clear Data',
+          style: 'destructive',
+          onPress: () =>
+            Alert.alert('Clear All Revenue Data?', 'All payments received so far will be removed from this screen.', [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Yes, Clear',
+                style: 'destructive',
+                onPress: async () => {
+                  const res = await clearRevenueData();
+                  if (!res.ok) Alert.alert('Could Not Clear', res.message ?? 'Please try again.');
+                  else Alert.alert('Cleared', res.count > 0 ? 'Revenue data has been cleared.' : 'There was nothing to clear.');
+                },
+              },
+            ]),
+        },
+      ]
+    );
+  };
 
   /* ------------------------- last 6 months ------------------------- */
   const months = useMemo(() => {
@@ -249,7 +287,9 @@ export default function AdminRevenueScreen() {
 
   /* ------------------------- collection status (rent) for the month in focus ------------------------- */
   const focusYm = sel.kind === 'month' ? sel.ym : sel.kind === 'day' ? sel.key.slice(0, 7) : sel.from.slice(0, 7);
-  const focusRecords = paymentRecords.filter((p) => p.month === ymLabel(focusYm));
+  const focusRecords = paymentRecords.filter(
+    (p) => p.month === ymLabel(focusYm) && !(p.status === 'Paid' && (p as any).revenueCleared)
+  );
   const overallAmount = focusRecords.reduce((s, p) => s + p.amount, 0);
   const collectedAmount = focusRecords.filter((p) => p.status === 'Paid').reduce((s, p) => s + p.amount, 0);
   const dueAmount = overallAmount - collectedAmount;
@@ -297,7 +337,13 @@ export default function AdminRevenueScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={[typography.heading3, { color: colors.text }]}>Monthly Revenue</Text>
-        <View style={{ width: 22 }} />
+        <TouchableOpacity
+          onPress={handleClearData}
+          style={styles.backButton}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="trash-outline" size={22} color={colors.error} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -597,9 +643,9 @@ export default function AdminRevenueScreen() {
 
         {/* ---------------- Monthly breakdown (tap a month) ---------------- */}
         <Text style={[typography.heading3, { color: colors.text, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
-          Monthly Breakdown
+          Monthly Breakdown <Text style={[typography.caption, { color: colors.textMuted }]}>(last 3 months)</Text>
         </Text>
-        {[...months].reverse().map((entry) => {
+        {[...months].reverse().slice(0, 3).map((entry) => {
           const isSelected = sel.kind === 'month' && sel.ym === entry.ym;
           return (
             <TouchableOpacity

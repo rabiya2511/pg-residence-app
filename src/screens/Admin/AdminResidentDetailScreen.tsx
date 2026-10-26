@@ -8,6 +8,8 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
 import ResidentRentTrendChart from '../../components/admin/ResidentRentTrendChart';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
+
 
 const statusColors: Record<string, { bg: string; text: string }> = {
   Paid: { bg: '#D1FAE5', text: colors.success },
@@ -139,12 +141,9 @@ export default function AdminResidentDetailScreen() {
           <Ionicons name="create-outline" size={22} color={colors.text} />
         </TouchableOpacity>
       </View>
-
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.profileCard}>
-          <View style={styles.avatarWrap}>
-            <Ionicons name="person" size={32} color={colors.primary} />
-          </View>
+          <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={80} />
           <Text style={[typography.heading2, { color: colors.text, marginTop: spacing.sm }]}>
             {resident.name}
           </Text>

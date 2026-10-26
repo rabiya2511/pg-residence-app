@@ -11,6 +11,7 @@ import { useRent } from '../../context/RentContext';
 import { useResident } from '../../context/ResidentContext';
 import { useAnnouncements } from '../../context/AnnouncementsContext';
 import SectionHeader from '../../components/common/SectionHeader';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 import StayOverviewCard from '../../components/home/StayOverviewCard';
 import QuickActionCard from '../../components/home/QuickActionCard';
 import RentStatusCard from '../../components/home/RentStatusCard';
@@ -23,7 +24,7 @@ export default function HomeScreen() {
   const { residentData } = useResident();
   const { announcements, pendingResidentNotice, clearPendingResidentNotice } = useAnnouncements();
 
-   const [whatsappVisible, setWhatsappVisible] = useState(false);
+  const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [newNoticeRecipients, setNewNoticeRecipients] = useState<WhatsAppRecipient[]>([]);
 
   useEffect(() => {
@@ -32,6 +33,7 @@ export default function HomeScreen() {
         {
           id: residentData.name,
           name: residentData.name,
+          profileImageUri: residentData.profileImageUri,
           message: `📢 ${pendingResidentNotice.title}\n\n${pendingResidentNotice.description}\n\n— Lokansh Aditya PG Residency`,
         },
       ]);
@@ -66,9 +68,9 @@ export default function HomeScreen() {
       return;
     }
     if (actionId === 'nearby') {
-  navigation.navigate('NearbyPlaces');
-  return;
-}
+      navigation.navigate('NearbyPlaces');
+      return;
+    }
     if (actionId === 'vacate') {
       navigation.navigate('VacateNotice');
       return;
@@ -99,8 +101,12 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Notifications')}>
               <Ionicons name="notifications-outline" size={22} color={colors.text} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('MainTabs', { screen: 'Profile' })}>
-              <Ionicons name="person-circle-outline" size={26} color={colors.text} />
+            <TouchableOpacity
+              style={styles.iconButton}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('MainTabs', { screen: 'Profile' })}
+            >
+              <ResidentAvatar uri={residentData.profileImageUri} name={residentData.name} size={32} />
             </TouchableOpacity>
           </View>
         </View>
@@ -189,6 +195,7 @@ const styles = StyleSheet.create({
   },
   headerIcons: {
     flexDirection: 'row',
+    alignItems: 'center',
   },
   iconButton: {
     marginLeft: spacing.sm,

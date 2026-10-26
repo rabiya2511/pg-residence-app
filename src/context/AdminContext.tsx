@@ -78,6 +78,8 @@ export type AddComplaintInput = {
   description: string;
   residentId?: string;
   propertyId?: string;
+  // Local photo URIs (camera / gallery). Uploaded to Storage after the complaint is saved.
+  photoUris?: string[];
 };
 
 type BookMonthlyResidentInput = {
@@ -176,6 +178,8 @@ type AdminContextType = {
   rooms: Room[];
   archivedResidents: ArchivedResident[];
   markRentPaid: (residentId: string) => void;
+  /** Sets (or clears, with 0) a deduction on THIS resident's rent for the current month. Pending shows rent minus deduction. */
+  setRentDeduction: (residentId: string, amount: number, reason?: string) => void;
   recordRentPayment: (
     residentId: string,
     method: string,
@@ -190,6 +194,12 @@ type AdminContextType = {
   markAllComplaintNotificationsRead: () => void;
   updateComplaintStatus: (complaintId: string, status: AdminComplaint['status']) => void;
   markComplaintViewed: (complaintId: string) => void;
+  /** Permanently deletes complaints of the active property ('resolved' = only resolved ones). Returns how many were removed. */
+  clearComplaints: (mode: 'resolved' | 'all') => Promise<{ ok: boolean; count: number; message?: string }>;
+  /** Hides every payment received so far from the Monthly Revenue screen. Rent records, dues and guest records are kept. */
+  clearRevenueData: () => Promise<{ ok: boolean; count: number; message?: string }>;
+  /** Brings back everything hidden by clearRevenueData. */
+  restoreRevenueData: () => Promise<{ ok: boolean; count: number; message?: string }>;
   /**
    * Creates a new Open complaint directly on the admin-side Complaints
    * system, and fires a matching AdminComplaintNotification for the bell
@@ -240,6 +250,8 @@ type AdminContextType = {
   deleteProperty: (propertyId: string) => Promise<{ ok: boolean; message?: string }>;
   addRoom: (propertyId: string, floor: number, roomNumber: string, capacity: number) => Room;
   updateRoom: (roomId: string, updates: Partial<Room>) => void;
+  /** Deletes a room. Refused while a resident or a current/upcoming day guest is still assigned to it. */
+  deleteRoom: (roomId: string) => Promise<{ ok: boolean; message?: string }>;
   /**
    * Auto-generates `totalRooms` rooms for a brand-new property, distributed
    * evenly across `floors`, each with `defaultCapacity` beds.
@@ -714,6 +726,40 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     recordRentPayment(residentId, 'Cash');
   };
 
+  // Deduction on one resident's rent for the current month (e.g. 500 off a 9000 rent -> 8500 due).
+  const setRentDeduction = (residentId: string, amount: number, reason: string = '') => {
+    const resident = rawResidents.find((r) => r.id === residentId);
+    if (!resident) return;
+    const now = new Date();
+    const label = getMonthLabel(now);
+    const existing = paymentsQ.data.find((p) => p.residentId === residentId && p.month === label);
+    const recordId = existing?.id ?? paymentDocId(residentId, label);
+    const base = existing?.amount ?? resident.monthlyRent;
+    const deduction = Math.max(0, Math.min(Math.round(amount) || 0, base));
+    const due = getDueDateForMonth(now, resident.rentDueDay);
+    setDoc(
+      doc(db, 'payments', recordId),
+      clean({
+        ...(existing
+          ? {}
+          : {
+              id: recordId,
+              residentId,
+              propertyId: resident.propertyId,
+              month: label,
+              amount: resident.monthlyRent,
+              dueDate: formatDisplayDate(due),
+              paidOn: null,
+              status: now.getTime() > due.getTime() ? 'Overdue' : 'Pending',
+              createdAt: Date.now(),
+            }),
+        deduction,
+        deductionReason: deduction > 0 ? reason.trim() || null : null,
+      }),
+      { merge: true }
+    ).catch(warn('setRentDeduction:'));
+  };
+
   const recordRentPayment = (
     residentId: string,
     method: string,
@@ -742,7 +788,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       id: recordId,
       residentId,
       month: label,
-      amount: existing?.amount ?? options?.amount ?? resident?.monthlyRent ?? 0,
+      // Any deduction agreed for this month comes off what is actually collected.
+      amount: Math.max(0, (existing?.amount ?? options?.amount ?? resident?.monthlyRent ?? 0) - (existing?.deduction ?? 0)),
       dueDate: existing?.dueDate ?? formatDisplayDate(dueDateObj),
       paidOn: paidOnStr,
       status: 'Paid',
@@ -797,6 +844,77 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     updateDoc(doc(db, 'complaints', complaintId), { viewed: true }).catch(warn('markComplaintViewed:'));
   };
 
+  // Runs many small writes in batches (Firestore allows at most 500 per batch).
+  const runInBatches = async (ops: ((b: ReturnType<typeof writeBatch>) => void)[]) => {
+    for (let i = 0; i < ops.length; i += 400) {
+      const batch = writeBatch(db);
+      ops.slice(i, i + 400).forEach((op) => op(batch));
+      await batch.commit();
+    }
+  };
+
+  const clearComplaints = async (mode: 'resolved' | 'all') => {
+    const targets = complaintsQ.data.filter((x) => mode === 'all' || x.status === 'Resolved');
+    if (targets.length === 0) return { ok: true, count: 0 };
+    const ids = new Set(targets.map((x) => x.id));
+    const ops: ((b: ReturnType<typeof writeBatch>) => void)[] = [
+      ...targets.map((x) => (b: any) => b.delete(doc(db, 'complaints', x.id))),
+      // the bell entries that belong to those complaints go too
+      ...notifQ.data
+        .filter((n) => n.kind === 'complaint' && ids.has(n.complaintId))
+        .map((n) => (b: any) => b.delete(doc(db, 'notifications', n.id))),
+    ];
+    try {
+      await runInBatches(ops);
+      return { ok: true, count: targets.length };
+    } catch (e: any) {
+      console.warn('clearComplaints failed:', e?.code ?? e?.message);
+      return {
+        ok: false,
+        count: 0,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'Not allowed. Publish the latest Firestore rules and try again.'
+            : 'Could not clear the complaints. Check your connection and try again.',
+      };
+    }
+  };
+
+  const clearRevenueData = async () => {
+    const paid = paymentsQ.data.filter((p) => p.status === 'Paid' && !p.revenueCleared);
+    const guests = guestsQ.data.filter((g) => (g.advanceAmount ?? 0) > 0 || (g.payments?.length ?? 0) > 0);
+    const now = Date.now();
+    const ops: ((b: any) => void)[] = [
+      ...paid.map((p) => (b: any) => b.update(doc(db, 'payments', p.id), { revenueCleared: true })),
+      ...guests.map((g) => (b: any) => b.update(doc(db, 'dailyGuests', g.id), { revenueClearedAt: now })),
+    ];
+    if (ops.length === 0) return { ok: true, count: 0 };
+    try {
+      await runInBatches(ops);
+      return { ok: true, count: ops.length };
+    } catch (e: any) {
+      console.warn('clearRevenueData failed:', e?.code ?? e?.message);
+      return { ok: false, count: 0, message: 'Could not clear the revenue data. Check your connection and try again.' };
+    }
+  };
+
+  const restoreRevenueData = async () => {
+    const paid = paymentsQ.data.filter((p) => p.revenueCleared);
+    const guests = guestsQ.data.filter((g) => (g.revenueClearedAt ?? 0) > 0);
+    const ops: ((b: any) => void)[] = [
+      ...paid.map((p) => (b: any) => b.update(doc(db, 'payments', p.id), { revenueCleared: false })),
+      ...guests.map((g) => (b: any) => b.update(doc(db, 'dailyGuests', g.id), { revenueClearedAt: 0 })),
+    ];
+    if (ops.length === 0) return { ok: true, count: 0 };
+    try {
+      await runInBatches(ops);
+      return { ok: true, count: ops.length };
+    } catch (e: any) {
+      console.warn('restoreRevenueData failed:', e?.code ?? e?.message);
+      return { ok: false, count: 0, message: 'Could not restore the revenue data. Check your connection and try again.' };
+    }
+  };
+
   const addComplaint = (input: AddComplaintInput): string => {
     const id = doc(collection(db, 'complaints')).id;
 
@@ -828,6 +946,21 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       // even if the resident record is later removed.
       clean({ ...newComplaint, propertyId, residentPhone: resident?.phone ?? null, createdAt: Date.now() })
     ).catch(warn('addComplaint:'));
+
+    // Photos: upload each one, then attach the cloud links to the complaint.
+    const localPhotos = (input.photoUris ?? []).filter(Boolean);
+    if (localPhotos.length > 0) {
+      Promise.all(
+        localPhotos.map((uri, i) =>
+          /^https?:/.test(uri) ? Promise.resolve(uri) : uploadImage(uri, `complaints/${id}/photo-${i}-${Date.now()}.jpg`)
+        )
+      )
+        .then((urls) => updateDoc(doc(db, 'complaints', id), { photos: urls }))
+        .catch((e: any) => {
+          console.warn('complaint photo upload failed:', e?.code ?? e?.message);
+          Alert.alert('Photo upload failed', 'The complaint was saved, but its photos could not be uploaded.');
+        });
+    }
 
     pushNotification(
       'complaint',
@@ -1307,6 +1440,45 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     updateDoc(doc(db, 'rooms', roomId), clean(patch)).catch(warn('updateRoom:'));
   };
 
+  // Deletes one room. Checks the database itself (not just what is loaded) so nobody is left in a room that no longer exists.
+  const deleteRoom = async (roomId: string): Promise<{ ok: boolean; message?: string }> => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room) return { ok: false, message: 'Room not found.' };
+    try {
+      const [resSnap, guestSnap] = await Promise.all([
+        getDocs(query(collection(db, 'residents'), where('propertyId', '==', room.propertyId), where('roomId', '==', roomId))),
+        getDocs(query(collection(db, 'dailyGuests'), where('propertyId', '==', room.propertyId), where('roomId', '==', roomId))),
+      ]);
+      const residentsInRoom = resSnap.docs.filter((d: any) => !d.data().archived).length;
+      if (residentsInRoom > 0) {
+        return {
+          ok: false,
+          message: `Room ${room.roomNumber} still has ${residentsInRoom} resident${residentsInRoom > 1 ? 's' : ''}. Move, vacate or archive them first.`,
+        };
+      }
+      const guestsInRoom = guestSnap.docs.filter((d: any) => {
+        const g = d.data() as AdminDailyGuest;
+        return isDailyGuestActiveNow(g) || (!g.checkedOut && g.checkInTimestamp > Date.now());
+      }).length;
+      if (guestsInRoom > 0) {
+        return { ok: false, message: `Room ${room.roomNumber} still has current or upcoming day guests.` };
+      }
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'rooms', roomId));
+      await batch.commit();
+      return { ok: true };
+    } catch (e: any) {
+      console.warn('deleteRoom failed:', e?.code ?? e?.message);
+      return {
+        ok: false,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'Not allowed to delete this room.'
+            : 'Could not delete the room. Check your connection and try again.',
+      };
+    }
+  };
+
   /**
    * Auto-generates `totalRooms` rooms for a brand-new property, distributed
    * evenly across `floors` (1..floors), each with `defaultCapacity` beds
@@ -1433,6 +1605,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         rooms,
         archivedResidents,
         markRentPaid,
+        setRentDeduction,
         recordRentPayment,
         markNotificationRead,
         markAllNotificationsRead,
@@ -1442,6 +1615,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         markAllComplaintNotificationsRead,
         updateComplaintStatus,
         markComplaintViewed,
+        clearComplaints,
+        clearRevenueData,
+        restoreRevenueData,
         addComplaint,
         addResident,
         registerResident,
@@ -1464,6 +1640,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         deleteProperty,
         addRoom,
         updateRoom,
+        deleteRoom,
         generateRoomsForProperty,
         bookMonthlyResident,
         bookDayGuestSelf,

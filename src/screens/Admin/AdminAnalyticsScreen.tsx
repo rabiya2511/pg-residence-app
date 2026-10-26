@@ -1302,13 +1302,13 @@ export default function AdminAnalyticsScreen() {
 
   const renderTrends = () => (
     <>
-      <Card title="Collections — Last 6 Months">
+      <Card title="Collections — Last 3 Months">
         <BarChart data={collectionsTrend} color={colors.success} format={formatShort} />
       </Card>
-      <Card title="New Residents — Last 6 Months">
+      <Card title="New Residents — Last 3 Months">
         <BarChart data={joinersTrend} color={colors.primary} />
       </Card>
-      <Card title="Maintenance Requests — Last 6 Months">
+      <Card title="Maintenance Requests — Last 3 Months">
         <BarChart
           data={monthBuckets.map((b) => ({
             label: b.label,

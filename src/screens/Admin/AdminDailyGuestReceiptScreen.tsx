@@ -62,7 +62,12 @@ export default function AdminDailyGuestReceiptScreen() {
     setPaymentModalVisible(false);
   };
 
-  const goToStays = () => navigation.navigate('AdminDailyGuests');
+  // Go BACK to the existing Day Guests screen. (navigate() would push a second copy of it on top
+  // of this invoice, so pressing back there would bring the invoice up again.)
+  const goToStays = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('AdminDailyGuests');
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

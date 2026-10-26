@@ -94,7 +94,7 @@ export default function AdminPendingDuesScreen() {
         let months = 1;
         let oldestDue = fallbackDue;
         if (unpaid.length > 0) {
-          outstanding = unpaid.reduce((sum, p) => sum + p.amount, 0);
+          outstanding = unpaid.reduce((sum, p) => sum + Math.max(0, p.amount - ((p as any).deduction ?? 0)), 0);
           months = unpaid.length;
           const dates = unpaid.map((p) => parseDue(p.dueDate)).filter((d): d is Date => !!d);
           if (dates.length > 0) oldestDue = new Date(Math.min(...dates.map((d) => d.getTime())));
@@ -183,10 +183,11 @@ export default function AdminPendingDuesScreen() {
       d.daysOverdue > 0 ? ` (${d.daysOverdue} days overdue)` : ''
     }. Please pay at the earliest. — ${propertyNameOf(d.resident)}`;
 
-  const reminderRecipients: WhatsAppRecipient[] = filtered.map((d) => ({
+    const reminderRecipients: WhatsAppRecipient[] = filtered.map((d) => ({
     id: d.resident.id,
     name: d.resident.name,
     phone: d.resident.phone,
+    profileImageUri: d.resident.profileImageUri,
     message: reminderMessage(d),
   }));
 

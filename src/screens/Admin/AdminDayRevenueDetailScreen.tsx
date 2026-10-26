@@ -8,6 +8,7 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
 import { properties, initialRooms as rooms, AdminDailyGuest } from '../../constants/mockData';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 function collectedAmount(guest: AdminDailyGuest): number {
   return guest.paymentStatus === 'Paid' ? guest.totalAmount : guest.advanceAmount ?? 0;
@@ -21,7 +22,7 @@ function GuestRow({ guest, onPress }: { guest: AdminDailyGuest; onPress: () => v
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={onPress}>
       <View style={styles.avatarWrap}>
-        <Ionicons name="person" size={20} color={colors.primary} />
+        <ResidentAvatar uri={guest.profileImageUri} name={guest.name} size={40} />
       </View>
       <View style={styles.content}>
         <Text style={[typography.bodyBold, { color: colors.text }]}>{guest.name}</Text>
@@ -122,12 +123,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   avatarWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
     marginRight: spacing.sm,
   },
   content: { flex: 1 },

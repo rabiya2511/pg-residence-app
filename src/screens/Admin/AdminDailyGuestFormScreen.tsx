@@ -44,7 +44,8 @@ import {
 // Pre-filled security deposit (change to whatever your PG normally collects).
 const DEFAULT_SECURITY_DEPOSIT = 1000;
 
-const ID_TYPES = ['Aadhaar Card', 'PAN Card', 'Driving License', 'Passport', 'Voter ID'];
+// Only the Aadhaar card is collected as ID proof.
+const ID_TYPE = 'Aadhaar Card';
 const PAY_MODES: AdminDailyGuestPaymentMethod[] = ['UPI', 'Cash', 'Card', 'Bank Transfer'];
 const VEHICLE_TYPES = ['Bicycle', 'Two-Wheeler', 'Four-Wheeler'] as const;
 type VehicleType = (typeof VEHICLE_TYPES)[number];
@@ -315,14 +316,11 @@ export function DailyGuestRegistrationForm({
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [vehicleModel, setVehicleModel] = useState('');
 
-  // 5. identity & KYC
-  const [idType, setIdType] = useState('Aadhaar Card');
+  // 5. identity & KYC (Aadhaar card only)
+  const idType = ID_TYPE;
   const [idNumber, setIdNumber] = useState('');
   const [frontUri, setFrontUri] = useState<string | null>(null);
   const [backUri, setBackUri] = useState<string | null>(null);
-  const [officeUri, setOfficeUri] = useState<string | null>(null);
-  const [collegeUri, setCollegeUri] = useState<string | null>(null);
-  const [otherUri, setOtherUri] = useState<string | null>(null);
 
   // 6. payment
   const [deposit, setDeposit] = useState(String(DEFAULT_SECURITY_DEPOSIT));
@@ -337,7 +335,7 @@ export function DailyGuestRegistrationForm({
 
   // ----- dates -----
   const checkOut = addDays(checkIn, days);
-  const attachedCount = [frontUri, backUri, officeUri, collegeUri, otherUri].filter(Boolean).length;
+  const attachedCount = [frontUri, backUri].filter(Boolean).length;
 
   // ----- room availability for the chosen stay window -----
   const roomsOfProperty = rooms
@@ -400,7 +398,7 @@ export function DailyGuestRegistrationForm({
     if (days < 1) return Alert.alert('Invalid Stay', 'The stay must be at least 1 day.');
     if (rateNum <= 0) return Alert.alert('Daily Rate Required', 'Please enter the daily rate.');
     if (toNum(discount) > grossRent) return Alert.alert('Invalid Discount', 'The discount cannot be more than the stay rent.');
-    if (!idNumber.trim()) return Alert.alert('ID Number Required', `Please enter the ${idType} number.`);
+    if (!idNumber.trim()) return Alert.alert('Aadhaar Number Required', `Please enter the ${idType} number.`);
     if (!frontUri || !backUri)
       return Alert.alert('Upload ID Proof', `Please upload both the front and back side of the ${idType}.`);
     if (!termsAgreed) return Alert.alert('Terms Required', 'Please agree to the Terms and Conditions to continue.');
@@ -430,9 +428,6 @@ export function DailyGuestRegistrationForm({
       permanentAddress: address.trim() || undefined,
       idDocType: idType,
       idDocNumber: idNumber.trim(),
-      officeIdUri: officeUri,
-      collegeIdUri: collegeUri,
-      otherDocUri: otherUri,
       bedNumber: effectiveBed,
       dailyRate: rateNum,
       discount: discountNum,
@@ -450,14 +445,11 @@ export function DailyGuestRegistrationForm({
       isPreBooking: isFuture,
     });
 
-    // Photos and documents go to cloud storage; the saved record is updated with their links.
+    // Photos and the Aadhaar images go to cloud storage; the saved record is updated with their links.
     const uploads: [string, string | null][] = [
       ['profileImageUri', profileUri],
       ['identityFrontUri', frontUri],
       ['identityBackUri', backUri],
-      ['officeIdUri', officeUri],
-      ['collegeIdUri', collegeUri],
-      ['otherDocUri', otherUri],
     ];
     uploads.forEach(([field, uri]) => uri && uploadDailyGuestImage(newGuest.id, field, uri));
 
@@ -719,58 +711,40 @@ export function DailyGuestRegistrationForm({
         </View>
 
         {/* 5. Identity & KYC */}
-        <SectionCard icon="document-text-outline" title="5. Identity & KYC Documents" badge={`${attachedCount} of 5 Attached`}>
+        <SectionCard icon="document-text-outline" title="5. Identity & KYC Documents" badge={`${attachedCount} of 2 Attached`}>
           <View style={styles.twoCol}>
-            <SelectField
-              label="ID Type"
-              valueLabel={idType}
-              placeholder="Select"
-              options={ID_TYPES.map((t) => ({ id: t, label: t }))}
-              onSelect={setIdType}
+            <View style={[styles.field, styles.colField]}>
+              <Text style={[typography.caption, styles.label]}>ID Type</Text>
+              <View style={[styles.input, styles.selectInput]}>
+                <Text style={[typography.body, { color: colors.text }]}>{ID_TYPE}</Text>
+                <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
+              </View>
+            </View>
+            <Field
+              label="Aadhaar Number *"
+              value={idNumber}
+              onChangeText={setIdNumber}
+              placeholder="Enter number"
+              keyboardType="numeric"
               containerStyle={styles.colField}
             />
-            <Field label="ID Number *" value={idNumber} onChangeText={setIdNumber} placeholder="Enter number" autoCapitalize="characters" containerStyle={styles.colField} />
           </View>
 
           <DocCard
-            title="ID / Document – Front Side"
-            subtitle="Front view of government issued identity card"
+            title="Aadhaar Card – Front Side"
+            subtitle="Front view of the Aadhaar card"
             uri={frontUri}
             onUpload={() => pickImageFromFiles(setFrontUri)}
             onCamera={() => takePhotoWithCamera(setFrontUri)}
             onRemove={() => setFrontUri(null)}
           />
           <DocCard
-            title="ID / Document – Back Side"
+            title="Aadhaar Card – Back Side"
             subtitle="Back view containing permanent address details"
             uri={backUri}
             onUpload={() => pickImageFromFiles(setBackUri)}
             onCamera={() => takePhotoWithCamera(setBackUri)}
             onRemove={() => setBackUri(null)}
-          />
-          <DocCard
-            title="Office ID"
-            subtitle="Corporate / Employer employee identity proof"
-            uri={officeUri}
-            onUpload={() => pickImageFromFiles(setOfficeUri)}
-            onCamera={() => takePhotoWithCamera(setOfficeUri)}
-            onRemove={() => setOfficeUri(null)}
-          />
-          <DocCard
-            title="College ID"
-            subtitle="University / College student ID verification card"
-            uri={collegeUri}
-            onUpload={() => pickImageFromFiles(setCollegeUri)}
-            onCamera={() => takePhotoWithCamera(setCollegeUri)}
-            onRemove={() => setCollegeUri(null)}
-          />
-          <DocCard
-            title="Other Document"
-            subtitle="Rental agreement, guardian letter or other certificate"
-            uri={otherUri}
-            onUpload={() => pickImageFromFiles(setOtherUri)}
-            onCamera={() => takePhotoWithCamera(setOtherUri)}
-            onRemove={() => setOtherUri(null)}
           />
         </SectionCard>
 

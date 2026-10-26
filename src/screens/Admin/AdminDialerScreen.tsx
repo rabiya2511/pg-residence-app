@@ -18,6 +18,7 @@ import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
 import { AdminResident } from '../../constants/mockData';
 import SpeedDialContacts from '../../components/SpeedDialContacts';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 type TabKey = 'room' | 'dialpad' | 'speed';
 
@@ -48,13 +49,10 @@ function ResidentCallCard({
   roomLabel?: string;
   callingEnabled: boolean;
 }) {
-  const initial = resident.name.trim().charAt(0).toUpperCase() || '?';
   return (
     <View style={styles.residentCard}>
       <View style={styles.residentTopRow}>
-        <View style={styles.avatar}>
-          <Text style={[typography.bodyBold, { color: colors.white }]}>{initial}</Text>
-        </View>
+        <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={40} />
         <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
           <View style={styles.phoneRow}>
@@ -114,7 +112,7 @@ function ResidentCallCard({
 
 export default function AdminDialerScreen() {
   const navigation = useNavigation<any>();
-  const { residents, rooms, properties } = useAdmin();
+  const { residents, rooms, properties, activeProperty, activePropertyId } = useAdmin();
 
   const [tab, setTab] = useState<TabKey>('room');
   const [callingEnabled, setCallingEnabled] = useState(true);
@@ -122,7 +120,7 @@ export default function AdminDialerScreen() {
   const [floorFilter, setFloorFilter] = useState<number | 'all'>('all');
   const [dialInput, setDialInput] = useState('');
 
-  const propertyName = properties[0]?.name ?? 'My PG';
+  const propertyName = activeProperty?.name ?? 'My PG';
 
   const floors = useMemo(
     () => Array.from(new Set(rooms.map((r) => r.floor))).sort((a, b) => a - b),
@@ -170,7 +168,7 @@ export default function AdminDialerScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-          <View style={styles.header}>
+      <View style={styles.header}>
         <Text style={[typography.heading3, { color: colors.text }]}>Smart Dialer</Text>
       </View>
 
@@ -336,7 +334,7 @@ export default function AdminDialerScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <SpeedDialContacts callingEnabled={callingEnabled} />
+          <SpeedDialContacts callingEnabled={callingEnabled} propertyId={activePropertyId} />
         </ScrollView>
       )}
     </SafeAreaView>
@@ -494,14 +492,6 @@ const styles = StyleSheet.create({
   residentTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   phoneRow: {
     flexDirection: 'row',

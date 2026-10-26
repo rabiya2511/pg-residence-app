@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -42,7 +42,7 @@ type RoomRow = {
 
 export default function RoomManagementScreen() {
   const navigation = useNavigation<any>();
-  const { rooms, residents, dailyGuests, properties } = useAdmin();
+  const { rooms, residents, dailyGuests, properties, deleteRoom } = useAdmin();
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
@@ -212,6 +212,38 @@ export default function RoomManagementScreen() {
     if (residentId) navigation.navigate(RESIDENT_DETAIL_ROUTE, { residentId });
   };
 
+  const confirmDeleteRoom = (room: RoomRow) => {
+    const residentsInRoom = residents.filter((r) => r.roomId === room.id).length;
+    const guestsInRoom = dailyGuests.filter(
+      (g) => g.roomId === room.id && (isDailyGuestActiveNow(g) || (!g.checkedOut && g.checkInTimestamp > Date.now()))
+    ).length;
+    if (residentsInRoom + guestsInRoom > 0) {
+      Alert.alert(
+        'Cannot Delete Room',
+        `Room ${room.roomNumber} still has ${residentsInRoom + guestsInRoom} ${
+          residentsInRoom + guestsInRoom === 1 ? 'person' : 'people'
+        } assigned. Move, vacate or archive them first.`
+      );
+      return;
+    }
+    Alert.alert(
+      'Delete Room',
+      `Delete Room ${room.roomNumber} (Floor ${room.floor}, ${room.capacity} Sharing)? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await deleteRoom(room.id);
+            if (!result.ok) Alert.alert('Cannot Delete Room', result.message ?? 'Please try again.');
+            else if (expandedRoomId === room.id) setExpandedRoomId(null);
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -370,7 +402,9 @@ export default function RoomManagementScreen() {
                 const sColor = statusColor(room.status);
                 return (
                   <View key={room.id} style={[styles.card, { marginBottom: spacing.sm }]}>
+                    <View style={styles.roomTop}>
                     <TouchableOpacity
+                      style={{ flex: 1 }}
                       activeOpacity={0.8}
                       onPress={() => setExpandedRoomId(expanded ? null : room.id)}
                     >
@@ -401,6 +435,15 @@ export default function RoomManagementScreen() {
                         />
                       </View>
                     </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.deleteRoomButton}
+                      activeOpacity={0.8}
+                      onPress={() => confirmDeleteRoom(room)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Ionicons name="trash-outline" size={20} color={colors.error} />
+                    </TouchableOpacity>
+                    </View>
 
                     {expanded && (
                       <View style={{ marginTop: spacing.md }}>
@@ -617,6 +660,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   roomTop: { flexDirection: 'row', alignItems: 'center' },
+  deleteRoomButton: {
+    marginLeft: spacing.sm,
+    width: 38,
+    height: 38,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.error,
+    backgroundColor: `${colors.error}12`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   floorTag: {
     marginLeft: spacing.sm,
     paddingHorizontal: spacing.sm,

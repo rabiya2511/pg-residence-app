@@ -1,4 +1,4 @@
-import React, { useState, useSyncExternalStore } from 'react';
+import React, { useMemo, useState, useSyncExternalStore } from 'react';
 import {
   View,
   Text,
@@ -30,6 +30,7 @@ export type SpeedDialContact = {
   name: string;
   category: string;
   phone: string;
+  propertyId: string | null;
 };
 
 export const CONTACT_CATEGORIES = [
@@ -61,11 +62,11 @@ const CATEGORY_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
 // India's national emergency numbers, so the list is useful from day one.
 // Remove or edit these if you prefer a completely empty list.
 let contacts: SpeedDialContact[] = [
-  { id: 'seed-112', name: 'National Emergency', category: 'Emergency', phone: '112' },
-  { id: 'seed-100', name: 'Police', category: 'Police', phone: '100' },
-  { id: 'seed-101', name: 'Fire Brigade', category: 'Fire', phone: '101' },
-  { id: 'seed-108', name: 'Ambulance', category: 'Ambulance', phone: '108' },
-  { id: 'seed-1091', name: 'Women Helpline', category: 'Emergency', phone: '1091' },
+  { id: 'seed-112', name: 'National Emergency', category: 'Emergency', phone: '112', propertyId: null },
+  { id: 'seed-100', name: 'Police', category: 'Police', phone: '100', propertyId: null },
+  { id: 'seed-101', name: 'Fire Brigade', category: 'Fire', phone: '101', propertyId: null },
+  { id: 'seed-108', name: 'Ambulance', category: 'Ambulance', phone: '108', propertyId: null },
+  { id: 'seed-1091', name: 'Women Helpline', category: 'Emergency', phone: '1091', propertyId: null },
 ];
 
 const listeners = new Set<() => void>();
@@ -88,8 +89,12 @@ export function removeSpeedDialContact(id: string) {
   emit();
 }
 
-export function useSpeedDialContacts(): SpeedDialContact[] {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+export function useSpeedDialContacts(propertyId: string | null): SpeedDialContact[] {
+  const all = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return useMemo(
+    () => all.filter((c) => c.propertyId === null || c.propertyId === propertyId),
+    [all, propertyId]
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -114,8 +119,15 @@ const CATEGORY_ORDER = ['Emergency', 'Police', 'Fire', 'Ambulance', 'Doctor', 'P
 /* Drop this into the Speed Dial tab in place of the residents list.  */
 /* ------------------------------------------------------------------ */
 
-export default function SpeedDialContacts({ callingEnabled = true }: { callingEnabled?: boolean }) {
-  const list = useSpeedDialContacts();
+export default function SpeedDialContacts({
+  callingEnabled = true,
+  propertyId = null,
+}: {
+  callingEnabled?: boolean;
+  propertyId?: string | null;
+}) {
+  const list = useSpeedDialContacts(propertyId);
+  // ...rest unchanged
   const [modalVisible, setModalVisible] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -171,7 +183,7 @@ export default function SpeedDialContacts({ callingEnabled = true }: { callingEn
       Alert.alert('Invalid Number', 'Please enter a valid phone number.');
       return;
     }
-    addSpeedDialContact({ name: name.trim(), category, phone: phone.trim() });
+    addSpeedDialContact({ name: name.trim(), category, phone: phone.trim(), propertyId });
     setModalVisible(false);
   };
 
@@ -213,6 +225,7 @@ export default function SpeedDialContacts({ callingEnabled = true }: { callingEn
               <View style={styles.categoryPill}>
                 <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>{c.category}</Text>
               </View>
+              {c.propertyId !== null && (
               <TouchableOpacity
                 onPress={() => confirmDelete(c)}
                 style={styles.deleteButton}
@@ -220,6 +233,7 @@ export default function SpeedDialContacts({ callingEnabled = true }: { callingEn
               >
                 <Ionicons name="trash-outline" size={18} color={colors.error} />
               </TouchableOpacity>
+            )}
             </View>
 
             <View style={styles.actionRow}>

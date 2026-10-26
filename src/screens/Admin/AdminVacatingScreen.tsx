@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from '../../constants/colors';
@@ -135,6 +136,9 @@ function VacatingCard({
 
 export default function AdminVacatingScreen() {
   const { residents, rooms, properties, submitVacateNotice, archiveResident } = useAdmin();
+  const route = useRoute<any>();
+  const requestedResidentId: string | undefined = route.params?.residentId;
+  const handledRequestRef = useRef<string | null>(null);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
@@ -202,6 +206,23 @@ export default function AdminVacatingScreen() {
     setShowDatePicker(false);
     setModalVisible(true);
   };
+
+  // Opened from a resident's menu ("Vacate"): open the dialog with that resident already chosen.
+  // (A resident who already has a vacate notice is simply shown in the list below.)
+  useEffect(() => {
+    if (!requestedResidentId || handledRequestRef.current === requestedResidentId) return;
+    const target = residents.find((r) => r.id === requestedResidentId);
+    if (!target) return; // residents may still be loading
+    handledRequestRef.current = requestedResidentId;
+    if (target.vacatingDate) return;
+    setSearch('');
+    setSelectedResidentId(target.id);
+    setVacateDate(new Date());
+    setIsEmergency(false);
+    setReason('');
+    setShowDatePicker(false);
+    setModalVisible(true);
+  }, [requestedResidentId, residents]);
 
   const handleDateChange = (_event: any, selected?: Date) => {
     setShowDatePicker(Platform.OS === 'ios');

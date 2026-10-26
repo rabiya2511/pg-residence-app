@@ -309,7 +309,8 @@ export default function AdminResidentFormScreen() {
   const [vehicleType, setVehicleType] = useState<VehicleType | null>(existing?.vehicleType ?? null);
   const [vehicleNumber, setVehicleNumber] = useState(existing?.vehicleNumber ?? '');
   const [vehicleModel, setVehicleModel] = useState(existing?.vehicleModel ?? '');
-
+// ---- Notes (optional) ----
+const [notes, setNotes] = useState(existing?.notes ?? '');
   const [termsAgreed, setTermsAgreed] = useState(isEdit);
 
   const selectedProperty = properties.find((p) => p.id === propertyId);
@@ -383,12 +384,29 @@ export default function AdminResidentFormScreen() {
       }
     }
   };
+const handleSave = () => {
+  const missing: string[] = [];
+  if (!name.trim()) missing.push('Full Name');
+  if (!phone.trim()) missing.push('Phone Number');
+  if (!email.trim()) missing.push('Email');
+  if (!gender) missing.push('Gender');
+  if (!propertyId) missing.push('Property');
+  if (!roomId) missing.push('Room');
+  if (!monthlyRent.trim()) missing.push('Monthly Rent');
 
-  const handleSave = () => {
-    if (!name.trim() || !phone.trim() || !email.trim() || !gender || !propertyId || !roomId || !monthlyRent.trim()) {
-      Alert.alert('Missing Information', 'Please fill in all required fields, including gender, room and monthly rent.');
-      return;
-    }
+  if (missing.length > 0) {
+    Alert.alert('Missing Information', `Please fill in: ${missing.join(', ')}.`);
+    return;
+  }
+
+  if (!gender) return;
+  const genderValue: AdminGender = gender;
+
+  if (phone.replace(/\D/g, '').length !== 10) {
+    Alert.alert('Invalid Phone Number', 'Please enter a 10-digit mobile number.');
+    return;
+  }
+
 
     // Government ID is required for a NEW resident (editing never forces re-uploads).
     if (!isEdit) {
@@ -408,7 +426,7 @@ export default function AdminResidentFormScreen() {
       return;
     }
 
-    if (guardianPhone.trim() && guardianPhone.replace(/\D/g, '').length < 10) {
+   if (guardianPhone.trim() && guardianPhone.replace(/\D/g, '').length !== 10) {
       Alert.alert('Invalid Guardian Number', 'Please enter a valid 10-digit mobile number for the guardian.');
       return;
     }
@@ -474,6 +492,7 @@ export default function AdminResidentFormScreen() {
       officeIdCode: officeIdCode.trim() || undefined,
       officeIdUri: officeIdUri,
       bedNumber: effectiveBed ?? undefined,
+      notes: notes.trim() || undefined,
     };
 
     // Saves the government ID images into the Identity Documents list.
@@ -492,7 +511,7 @@ export default function AdminResidentFormScreen() {
         name: name.trim(),
         phone: phone.trim(),
         email: email.trim(),
-        gender,
+         gender: genderValue,
         joiningDate: joiningDateStr,
         monthlyRent: rentValue,
         rentDueDay: dueDayValue,
@@ -509,7 +528,7 @@ export default function AdminResidentFormScreen() {
         name: name.trim(),
         phone: phone.trim(),
         email: email.trim(),
-        gender,
+        gender: genderValue,
         propertyId,
         roomId,
         joiningDate: joiningDateStr,
@@ -596,7 +615,14 @@ export default function AdminResidentFormScreen() {
           </View>
 
           <Field label="Full Name" value={name} onChangeText={setName} placeholder="e.g. Rahul Singh" />
-          <Field label="Phone Number" value={phone} onChangeText={setPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" />
+        <Field
+    label="Phone Number"
+    value={phone}
+    onChangeText={(t) => setPhone(t.replace(/\D/g, '').slice(0, 10))}
+    placeholder="10-digit mobile number"
+    keyboardType="phone-pad"
+    maxLength={10}
+  />
           <Field label="Email" value={email} onChangeText={setEmail} placeholder="e.g. rahul@example.com" keyboardType="email-address" />
 
           <Field label="Father / Guardian Name" value={guardianName} onChangeText={setGuardianName} placeholder="e.g. Suresh Singh" />
@@ -604,8 +630,9 @@ export default function AdminResidentFormScreen() {
             label="Father / Guardian Mobile No."
             value={guardianPhone}
             onChangeText={setGuardianPhone}
-            placeholder="+91 XXXXX XXXXX"
+            placeholder="10-digit mobile number"
             keyboardType="phone-pad"
+            maxLength={10}
           />
 
           <Text style={[typography.caption, styles.label]}>Gender</Text>
@@ -955,7 +982,24 @@ export default function AdminResidentFormScreen() {
               </View>
             )}
           </View>
-
+          {/* ---------------- Notes (optional) ---------------- */}
+        <View style={styles.sectionCard}>
+          <SectionTitle icon="create-outline" title="NOTES (OPTIONAL)" />
+          <TextInput
+            style={[styles.input, styles.notesInput]}
+            value={notes}
+            onChangeText={setNotes}
+            placeholder="Any notes about this resident, e.g. food preference, special requests, remarks..."
+            placeholderTextColor={colors.textMuted}
+            multiline
+            numberOfLines={4}
+            maxLength={500}
+            textAlignVertical="top"
+          />
+          <Text style={[typography.caption, { color: colors.textMuted, textAlign: 'right', marginTop: 4 }]}>
+            {notes.length}/500
+          </Text>
+        </View>
           {!isEdit && <TermsAgreement agreed={termsAgreed} onChange={setTermsAgreed} />}
 
           <View style={styles.footerRow}>
@@ -1012,6 +1056,7 @@ function Field({
   keyboardType,
   containerStyle,
   autoCapitalize,
+  maxLength,
 }: {
   label: string;
   value: string;
@@ -1020,6 +1065,7 @@ function Field({
   keyboardType?: 'default' | 'phone-pad' | 'numeric' | 'email-address';
   containerStyle?: any;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  maxLength?: number;
 }) {
   return (
     <View style={[styles.field, containerStyle]}>
@@ -1032,6 +1078,7 @@ function Field({
         placeholderTextColor={colors.textMuted}
         keyboardType={keyboardType ?? 'default'}
         autoCapitalize={autoCapitalize ?? (keyboardType === 'email-address' ? 'none' : 'sentences')}
+        maxLength={maxLength}
       />
     </View>
   );
@@ -1223,6 +1270,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   vehicleHeader: { flexDirection: 'row', alignItems: 'center' },
+  notesInput: { minHeight: 100, paddingTop: spacing.sm },
   footerRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   cancelButton: {
     flex: 1,

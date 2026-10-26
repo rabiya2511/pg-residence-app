@@ -29,6 +29,7 @@ import {
   PLACEHOLDER_GROUPS,
   MessageTemplate,
 } from '../../constants/communicationsData';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 type TabKey = 'dashboard' | 'new' | 'templates' | 'scheduled' | 'sent' | 'drafts' | 'failed' | 'history';
 
@@ -855,7 +856,7 @@ export default function AdminCommunicationsScreen() {
                     }}
                   >
                     <View style={styles.residentAvatar}>
-                      <Ionicons name="person" size={16} color={colors.primary} />
+                      <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={34} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>
@@ -1065,13 +1066,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   residentRowActive: { backgroundColor: colors.primaryLight },
-  residentAvatar: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+   residentAvatar: {
     marginRight: spacing.sm,
   },
 });

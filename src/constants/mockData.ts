@@ -510,6 +510,7 @@ export type AdminResident = {
   officeIdCode?: string;
   officeIdUri?: string | null;
   bedNumber?: number;
+  notes?: string;
 };
 
 export const adminResidents: AdminResident[] = [

@@ -5,6 +5,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { openWhatsApp } from '../../utils/whatsapp';
+import ResidentAvatar from '../common/ResidentAvatar';
 
 export type WhatsAppRecipient = {
   id: string;
@@ -12,6 +13,8 @@ export type WhatsAppRecipient = {
   message: string;
   /** Resident's phone number. Without it the message cannot be opened in WhatsApp. */
   phone?: string | null;
+  /** Resident's profile photo, shown next to the name. */
+  profileImageUri?: string | null;
 };
 
 type Props = {
@@ -64,9 +67,7 @@ export default function WhatsAppNotifyModal({ visible, onClose, title, recipient
             {recipients.map((r) => (
               <View key={r.id} style={styles.item}>
                 <View style={styles.itemTop}>
-                  <View style={styles.avatar}>
-                    <Ionicons name="person" size={16} color={colors.primary} />
-                  </View>
+                  <ResidentAvatar uri={r.profileImageUri} name={r.name} size={32} />
                   <View style={{ flex: 1, marginLeft: spacing.sm }}>
                     <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>{r.name}</Text>
                     <Text style={[typography.caption, { color: r.phone ? colors.textMuted : colors.error }]}>
@@ -107,7 +108,6 @@ const styles = StyleSheet.create({
   infoText: { flex: 1, fontSize: 12, color: '#075E54' },
   item: { marginBottom: spacing.md },
   itemTop: { flexDirection: 'row', alignItems: 'center' },
-  avatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   sendBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#25D366', borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: 7, gap: 5 },
   sendBtnDone: { backgroundColor: colors.textMuted },
   sendText: { color: colors.white, fontWeight: '700', fontSize: 12 },

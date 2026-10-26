@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert, TextInput, Modal, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -7,6 +7,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
+import { exportPropertyPdf, exportPropertyExcel } from '../../services/exportPropertyData';
 
 const initialsOf = (name: string) =>
   name
@@ -20,6 +21,34 @@ export default function AdminPropertiesScreen() {
   const navigation = useNavigation<any>();
   const { properties, deleteProperty, activeProperty, setActiveProperty } = useAdmin();
   const [query, setQuery] = useState('');
+
+  // ----- Export (PDF / Excel) of ONE property's complete data -----
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportId, setExportId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
+
+  const openExport = () => {
+    setExportId(activeProperty?.id ?? null);
+    setExportOpen(true);
+  };
+
+  const runExport = async (kind: 'pdf' | 'excel') => {
+    const property = properties.find((p) => p.id === exportId);
+    if (!property) {
+      Alert.alert('Select a Property', 'Choose the property whose data you want to download.');
+      return;
+    }
+    try {
+      setExporting(kind);
+      if (kind === 'pdf') await exportPropertyPdf(property);
+      else await exportPropertyExcel(property);
+    } catch (e: any) {
+      console.warn('property export failed:', e?.code ?? e?.message ?? e);
+      Alert.alert('Export Failed', 'Could not create the file. Check your connection and try again.');
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const activeId = activeProperty?.id;
 
@@ -273,6 +302,110 @@ export default function AdminPropertiesScreen() {
         )}
       </ScrollView>
 
+      {/* ---------------- Export button (bottom corner) ---------------- */}
+      {properties.length > 0 && (
+        <TouchableOpacity
+          style={[styles.exportFab, { bottom: activeProperty ? 96 : spacing.lg }]}
+          activeOpacity={0.85}
+          onPress={openExport}
+        >
+          <Ionicons name="download-outline" size={20} color={colors.white} />
+          <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>Export</Text>
+        </TouchableOpacity>
+      )}
+
+      <Modal visible={exportOpen} transparent animationType="slide" onRequestClose={() => !exporting && setExportOpen(false)}>
+        <TouchableOpacity
+          style={styles.exportOverlay}
+          activeOpacity={1}
+          onPress={() => !exporting && setExportOpen(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.exportSheet} onPress={() => {}}>
+            <View style={styles.exportHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[typography.heading3, { color: colors.text }]}>Download Property Data</Text>
+                <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                  Step 1: select the property. Step 2: choose PDF or Excel.
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => !exporting && setExportOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 260, marginTop: spacing.md }} showsVerticalScrollIndicator={false}>
+              {properties.map((p) => {
+                const selected = p.id === exportId;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.exportOption, selected && styles.exportOptionOn]}
+                    activeOpacity={0.85}
+                    disabled={!!exporting}
+                    onPress={() => setExportId(p.id)}
+                  >
+                    <Ionicons
+                      name={selected ? 'radio-button-on' : 'radio-button-off'}
+                      size={22}
+                      color={selected ? colors.primary : colors.textMuted}
+                    />
+                    <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                      <Text style={[typography.bodyBold, { color: colors.text }]} numberOfLines={1}>{p.name}</Text>
+                      <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+                        {p.addressDetails?.city ? `${p.addressDetails.city} • ` : ''}ID: {p.id.slice(0, 8)}
+                      </Text>
+                    </View>
+                    {p.id === activeId && (
+                      <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>Active</Text>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {exportId ? (
+              <>
+                <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.sm }]}>
+                  Includes only this property: details, rooms, residents (active and archived), rent records, day guests and complaints.
+                </Text>
+                <View style={styles.exportButtons}>
+                  <TouchableOpacity
+                    style={[styles.exportBtn, { backgroundColor: colors.error }, !!exporting && { opacity: 0.6 }]}
+                    activeOpacity={0.85}
+                    disabled={!!exporting}
+                    onPress={() => runExport('pdf')}
+                  >
+                    {exporting === 'pdf' ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <Ionicons name="document-text-outline" size={20} color={colors.white} />
+                    )}
+                    <Text style={[typography.button, { color: colors.white, marginLeft: 8 }]}>Download PDF</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.exportBtn, { backgroundColor: colors.success }, !!exporting && { opacity: 0.6 }]}
+                    activeOpacity={0.85}
+                    disabled={!!exporting}
+                    onPress={() => runExport('excel')}
+                  >
+                    {exporting === 'excel' ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <Ionicons name="grid-outline" size={20} color={colors.white} />
+                    )}
+                    <Text style={[typography.button, { color: colors.white, marginLeft: 8 }]}>Download Excel</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.md, textAlign: 'center' }]}>
+                Select a property to see the download options.
+              </Text>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ---------------- Selected active branch bar ---------------- */}
       {activeProperty && (
         <View style={styles.bottomBar}>
@@ -446,6 +579,51 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingVertical: spacing.md,
     marginLeft: spacing.sm,
+  },
+
+  exportFab: {
+    position: 'absolute',
+    right: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  exportOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  exportSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  exportHeader: { flexDirection: 'row', alignItems: 'center' },
+  exportOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  exportOptionOn: { borderColor: colors.primary, borderWidth: 2, backgroundColor: `${colors.primary}12` },
+  exportButtons: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  exportBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
   },
 
   bottomBar: {
