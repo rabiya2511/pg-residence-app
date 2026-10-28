@@ -223,6 +223,8 @@ type AdminContextType = {
   deleteResident: (residentId: string) => void;
   /** Soft delete: moves the resident out of the active list and frees their bed, but keeps all their data. */
   archiveResident: (residentId: string, reason?: string | null) => void;
+  /** Moves a Pre-booking resident to Active. Resolves only after the database accepted the change. */
+  activatePreBooking: (residentId: string) => Promise<{ ok: boolean; message?: string }>;
   /** Brings an archived resident back as an active resident (fails if the room is full). */
   restoreResident: (residentId: string, input?: RestoreResidentInput) => { ok: boolean; message?: string };
   /** Permanent delete: removes the resident (active or archived) and their documents, payments and notifications. */
@@ -244,11 +246,30 @@ type AdminContextType = {
   updateDailyGuest: (guestId: string, updates: Partial<AdminDailyGuest>) => void;
   uploadDailyGuestImage: (guestId: string, field: string, uri: string) => void;
   addProperty: (name: string, details?: NewPropertyDetails) => Property;
-  updatePropertyDetails: (propertyId: string, updates: PropertyDetailsUpdates) => void;
+  /**
+   * Creates a property and WAITS for the database to confirm. Refuses a duplicate name and a
+   * second call while one is already running. Optionally auto-generates rooms.
+   */
+  createProperty: (
+    name: string,
+    details?: NewPropertyDetails,
+    autoRooms?: { floors: number; totalRooms: number; capacity?: number }
+  ) => Promise<{ ok: boolean; property?: Property; message?: string }>;
+  updatePropertyDetails: (
+    propertyId: string,
+    updates: PropertyDetailsUpdates
+  ) => Promise<{ ok: boolean; message?: string }>;
   addPropertyImages: (propertyId: string, uris: string[]) => void;
   removePropertyImage: (propertyId: string, uri: string) => void;
   deleteProperty: (propertyId: string) => Promise<{ ok: boolean; message?: string }>;
   addRoom: (propertyId: string, floor: number, roomNumber: string, capacity: number) => Room;
+  /** Adds a room and waits for the database. Refuses blank/duplicate room numbers inside the same property. */
+  createRoom: (
+    propertyId: string,
+    floor: number,
+    roomNumber: string,
+    capacity: number
+  ) => Promise<{ ok: boolean; room?: Room; message?: string }>;
   updateRoom: (roomId: string, updates: Partial<Room>) => void;
   /** Deletes a room. Refused while a resident or a current/upcoming day guest is still assigned to it. */
   deleteRoom: (roomId: string) => Promise<{ ok: boolean; message?: string }>;
@@ -980,6 +1001,20 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   };
 
   // ───────── Residents ─────────
+  // Photos picked on this phone are local files that stop working later (or on another device).
+  // Shrink them (uploadImage) and save the picture on the resident record instead.
+  // ID cards go under identity/ so they are kept large enough to read; profile photos stay small.
+  const uploadResidentImages = (residentId: string, values: Record<string, any>) => {
+    (['profileImageUri', 'officeIdUri', 'companyIdProofUri'] as const).forEach((key) => {
+      const uri = values[key];
+      if (typeof uri !== 'string' || !uri || /^https?:/.test(uri)) return;
+      const folder = key === 'profileImageUri' ? 'profiles' : 'identity';
+      uploadImage(uri, `${folder}/${residentId}/${key}-${Date.now()}.jpg`)
+        .then((url) => updateDoc(doc(db, 'residents', residentId), { [key]: url }))
+        .catch((e: any) => console.warn(`upload ${key} failed:`, e?.code ?? e?.message));
+    });
+  };
+
   const addResident = (resident: Omit<AdminResident, 'id'>): AdminResident => {
     const id = doc(collection(db, 'residents')).id;
     const newResident: AdminResident = { ...resident, id };
@@ -992,6 +1027,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       residentId: id, propertyId: resident.propertyId, frontUri: null, backUri: null,
     });
     batch.commit().catch(warn('addResident:'));
+    uploadResidentImages(id, resident as any);
     return newResident;
   };
 
@@ -1040,6 +1076,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     delete patch.id;
     if (updates.phone) patch.phoneKey = last10(updates.phone);
     updateDoc(doc(db, 'residents', residentId), clean(patch)).catch(warn('updateResident:'));
+    uploadResidentImages(residentId, updates as any);
     if (updates.propertyId) {
       setDoc(doc(db, 'identityDocuments', residentId), { residentId, propertyId: updates.propertyId }, { merge: true })
         .catch(warn('identity propertyId:'));
@@ -1048,6 +1085,48 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   // Removes the resident and everything attached to them (same as permanent delete).
   const deleteResident = (residentId: string) => permanentlyDeleteResident(residentId);
+
+  const activatePreBooking = async (residentId: string): Promise<{ ok: boolean; message?: string }> => {
+    const resident = rawResidents.find((r) => r.id === residentId);
+    if (!resident) return { ok: false, message: 'Resident not found.' };
+    if (!resident.isPreBooking) return { ok: false, message: `${resident.name} is not a pre-booking resident.` };
+    if (!resident.roomId) return { ok: false, message: 'Assign a room to this resident before activating.' };
+
+    const now = new Date();
+    const today = formatDisplayDate(now);
+    const jd = parseDisplayDate(resident.joiningDate);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    // Still in the future? They are arriving now, so the joining date becomes today.
+    // The originally booked date is kept for the record.
+    const joinsInFuture = !!jd && jd.getTime() > startOfToday;
+    try {
+      await Promise.race([
+        updateDoc(
+          doc(db, 'residents', residentId),
+          clean({
+            isPreBooking: false,
+            preBookedJoiningDate: resident.joiningDate,
+            activatedOn: today,
+            activatedAt: Date.now(),
+            ...(joinsInFuture ? { joiningDate: today } : {}),
+          })
+        ),
+        new Promise((_, reject) => setTimeout(() => reject({ code: 'timeout' }), 10000)),
+      ]);
+      return { ok: true };
+    } catch (e: any) {
+      console.warn('activatePreBooking failed:', e?.code ?? e?.message);
+      return {
+        ok: false,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'You are not allowed to change this resident.'
+            : e?.code === 'timeout'
+            ? 'The update is taking too long. Check your connection and try again.'
+            : 'Could not activate the resident. Please try again.',
+      };
+    }
+  };
 
   const archiveResident = (residentId: string, reason: string | null = null) => {
     const resident = rawResidents.find((r) => r.id === residentId);
@@ -1355,10 +1434,83 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     return newProperty;
   };
 
-  const updatePropertyDetails = (propertyId: string, updates: PropertyDetailsUpdates) => {
+  const creatingPropertyRef = useRef(false);
+  const createProperty = async (
+    name: string,
+    details: NewPropertyDetails = {},
+    autoRooms?: { floors: number; totalRooms: number; capacity?: number }
+  ): Promise<{ ok: boolean; property?: Property; message?: string }> => {
+    const trimmed = name.trim();
+    if (!trimmed) return { ok: false, message: 'Please enter a property name.' };
+    if (adminProps.some((p) => (p.name ?? '').trim().toLowerCase() === trimmed.toLowerCase())) {
+      return { ok: false, message: `A property named "${trimmed}" already exists.` };
+    }
+    if (creatingPropertyRef.current) {
+      return { ok: false, message: 'This property is already being created. Please wait.' };
+    }
+    creatingPropertyRef.current = true;
+    try {
+      const addressDetails = details.addressDetails ?? EMPTY_ADDRESS;
+      const id = doc(collection(db, 'properties')).id;
+      const newProperty: Property = {
+        id,
+        name: trimmed,
+        address: formatPropertyAddress(addressDetails),
+        addressDetails,
+        images: [],
+        floors: details.floors,
+        branchManager: details.branchManager,
+        contactPhone: details.contactPhone,
+        standardRent: details.standardRent,
+        googleReviewLink: details.googleReviewLink,
+        houseGuidelines: details.houseGuidelines,
+        logoUri: details.logoUri ?? null,
+        upiId: details.upiId ?? null,
+        whatsappGroupLink: details.whatsappGroupLink ?? null,
+      };
+      await setDoc(
+        doc(db, 'properties', id),
+        clean({ ...newProperty, isPublic: false, ownerUid: getAuth().currentUser?.uid })
+      );
+      addPropertyToCurrentAdmin(id);
+      setActivePropertyId(id); // switch to the new (empty) property right away
+      if (autoRooms && autoRooms.floors > 0 && autoRooms.totalRooms > 0) {
+        await generateRoomsForProperty(id, autoRooms.floors, autoRooms.totalRooms, autoRooms.capacity ?? 2);
+      }
+      return { ok: true, property: newProperty };
+    } catch (e: any) {
+      console.warn('createProperty:', e?.code ?? e?.message ?? e);
+      return {
+        ok: false,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'You do not have permission to create a property.'
+            : 'The property could not be saved. Check your internet connection and try again.',
+      };
+    } finally {
+      creatingPropertyRef.current = false;
+    }
+  };
+
+  const updatePropertyDetails = async (
+    propertyId: string,
+    updates: PropertyDetailsUpdates
+  ): Promise<{ ok: boolean; message?: string }> => {
     const patch: Record<string, any> = { ...updates };
     if (updates.addressDetails) patch.address = formatPropertyAddress(updates.addressDetails);
-    updateDoc(doc(db, 'properties', propertyId), clean(patch)).catch(warn('updatePropertyDetails:'));
+    try {
+      await updateDoc(doc(db, 'properties', propertyId), clean(patch));
+      return { ok: true };
+    } catch (e: any) {
+      console.warn('updatePropertyDetails:', e?.code ?? e?.message ?? e);
+      return {
+        ok: false,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'You do not have permission to edit this property.'
+            : 'The changes could not be saved. Check your internet connection and try again.',
+      };
+    }
   };
 
   const addPropertyImages = (propertyId: string, uris: string[]) => {
@@ -1434,6 +1586,37 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     return newRoom;
   };
 
+  const createRoom = async (
+    propertyId: string,
+    floor: number,
+    roomNumber: string,
+    capacity: number
+  ): Promise<{ ok: boolean; room?: Room; message?: string }> => {
+    const number = roomNumber.trim();
+    if (!propertyId) return { ok: false, message: 'No property selected. Go back and choose a property first.' };
+    if (!number) return { ok: false, message: 'Please enter a room number.' };
+    const dup = rooms.find((r) => r.propertyId === propertyId && r.roomNumber.trim().toLowerCase() === number.toLowerCase());
+    if (dup) return { ok: false, message: `Room ${number} already exists in this property.` };
+    const newRoom: Room = { id: `${propertyId}-${number}`, propertyId, floor, roomNumber: number, capacity };
+    try {
+      // If the phone is offline the write is queued and never answers, so don't wait forever.
+      await Promise.race([
+        setDoc(doc(db, 'rooms', newRoom.id), newRoom),
+        new Promise((resolve) => setTimeout(resolve, 10000)),
+      ]);
+      return { ok: true, room: newRoom };
+    } catch (e: any) {
+      console.warn('createRoom failed:', e?.code ?? e?.message);
+      return {
+        ok: false,
+        message:
+          e?.code === 'firestore/permission-denied'
+            ? 'You are not allowed to add rooms to this property.'
+            : 'Could not save the room. Check your connection and try again.',
+      };
+    }
+  };
+
   const updateRoom = (roomId: string, updates: Partial<Room>) => {
     const patch: Record<string, any> = { ...updates };
     delete patch.id;
@@ -1492,7 +1675,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     totalRooms: number,
     defaultCapacity: number = 2
   ) => {
-    if (floors <= 0 || totalRooms <= 0) return;
+    if (floors <= 0 || totalRooms <= 0) return Promise.resolve();
     const roomsPerFloor = Math.ceil(totalRooms / floors);
     const batch = writeBatch(db);
     let remaining = totalRooms;
@@ -1505,7 +1688,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         remaining--;
       }
     }
-    batch.commit().catch(warn('generateRoomsForProperty:'));
+    return batch.commit().catch(warn('generateRoomsForProperty:'));
   };
 
   // ───────── Self-service booking ─────────
@@ -1624,6 +1807,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         updateResident,
         deleteResident,
         archiveResident,
+        activatePreBooking,
         restoreResident,
         permanentlyDeleteResident,
         submitVacateNotice,
@@ -1634,11 +1818,13 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         updateDailyGuest,
         uploadDailyGuestImage,
         addProperty,
+        createProperty,
         updatePropertyDetails,
         addPropertyImages,
         removePropertyImage,
         deleteProperty,
         addRoom,
+        createRoom,
         updateRoom,
         deleteRoom,
         generateRoomsForProperty,

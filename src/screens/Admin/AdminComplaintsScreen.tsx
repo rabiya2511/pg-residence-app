@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -55,14 +55,17 @@ function ComplaintCard({
   complaint,
   resident,
   onChangeStatus,
+  onOpen,
 }: {
   complaint: AdminComplaint;
   resident?: AdminResident;
   onChangeStatus: () => void;
+  onOpen: () => void;
 }) {
   const statusStyle = statusColors[complaint.status];
+  const isNew = complaint.status === 'Open' && !(complaint as any).viewed;
   return (
-    <View style={styles.card}>
+    <TouchableOpacity activeOpacity={0.9} style={styles.card} onPress={onOpen}>
       <View style={styles.cardRow}>
         <View style={styles.cardAvatar}>
           <ResidentAvatar
@@ -76,6 +79,11 @@ function ComplaintCard({
             <Text style={[typography.bodyBold, { color: colors.text, flex: 1, marginRight: spacing.xs }]}>
               {complaint.residentName} · {complaint.room}
             </Text>
+            {isNew && (
+              <View style={[styles.badge, { backgroundColor: colors.primary, marginRight: spacing.xs }]}>
+                <Text style={[typography.caption, { color: colors.white, fontWeight: '700' }]}>NEW</Text>
+              </View>
+            )}
             <TouchableOpacity
               style={[styles.badge, { backgroundColor: statusStyle.bg }]}
               onPress={onChangeStatus}
@@ -104,13 +112,13 @@ function ComplaintCard({
           </Text>
         </View>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
 export default function AdminComplaintsScreen() {
   const route = useRoute<any>();
-  const filterStatus: AdminComplaint['status'] | undefined = route.params?.filterStatus;
+  const routeFilter: string | undefined = route.params?.filterStatus;
   const { complaints, residents, rooms, properties, activeProperty, updateComplaintStatus, markComplaintViewed, addComplaint, clearComplaints } = useAdmin();
 
   const [whatsappVisible, setWhatsappVisible] = useState(false);
@@ -124,9 +132,28 @@ export default function AdminComplaintsScreen() {
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
 
-  const visibleComplaints = filterStatus
-    ? complaints.filter((c) => c.status === filterStatus)
-    : complaints;
+  // ---- Ticket filters: All / New / Open / In Progress / Resolved ----
+  type TicketFilter = 'All' | 'New' | 'Open' | 'In Progress' | 'Resolved';
+  const FILTERS: TicketFilter[] = ['All', 'New', 'Open', 'In Progress', 'Resolved'];
+  const toFilter = (v?: string): TicketFilter => (FILTERS.includes(v as TicketFilter) ? (v as TicketFilter) : 'All');
+  const [filter, setFilter] = useState<TicketFilter>(toFilter(routeFilter));
+  // The dashboard can open this screen already filtered (and the tab resets it).
+  useEffect(() => {
+    setFilter(toFilter(routeFilter));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeFilter]);
+
+  const isNewTicket = (c: AdminComplaint) => c.status === 'Open' && !(c as any).viewed;
+  const matches = (c: AdminComplaint, f: TicketFilter) =>
+    f === 'All' ? true : f === 'New' ? isNewTicket(c) : c.status === f;
+  const counts: Record<TicketFilter, number> = {
+    All: complaints.length,
+    New: complaints.filter((c) => matches(c, 'New')).length,
+    Open: complaints.filter((c) => matches(c, 'Open')).length,
+    'In Progress': complaints.filter((c) => matches(c, 'In Progress')).length,
+    Resolved: complaints.filter((c) => matches(c, 'Resolved')).length,
+  };
+  const visibleComplaints = complaints.filter((c) => matches(c, filter));
 
   const roomNumberOf = (roomId: string) => rooms.find((r) => r.id === roomId)?.roomNumber ?? '-';
 
@@ -270,6 +297,7 @@ export default function AdminComplaintsScreen() {
         text: 'Confirm',
         onPress: async () => {
           updateComplaintStatus(complaint.id, newStatus);
+          if (!(complaint as any).viewed) markComplaintViewed(complaint.id);
 
           const cAny = complaint as any;
           const resident = findResident(complaint);
@@ -317,10 +345,10 @@ export default function AdminComplaintsScreen() {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={[typography.heading2, { color: colors.text }]}>
-            {filterStatus ? `${filterStatus} Complaints` : 'Complaints'}
+            Complaints
           </Text>
           <Text style={[typography.body, { color: colors.textMuted }]}>
-            {visibleComplaints.length} total
+            {visibleComplaints.length} {filter === 'All' ? 'total' : filter.toLowerCase()}
           </Text>
         </View>
         <TouchableOpacity
@@ -337,6 +365,27 @@ export default function AdminComplaintsScreen() {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.filterRow}>
+        {FILTERS.map((f) => {
+          const on = filter === f;
+          return (
+            <TouchableOpacity
+              key={f}
+              style={[styles.filterChip, on && styles.filterChipActive]}
+              activeOpacity={0.8}
+              onPress={() => setFilter(f)}
+            >
+              <Text style={[typography.caption, { color: on ? colors.white : colors.text, fontWeight: '700' }]}>
+                {f}
+              </Text>
+              <View style={[styles.filterCount, { backgroundColor: on ? 'rgba(255,255,255,0.25)' : colors.background }]}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: on ? colors.white : colors.textMuted }}>{counts[f]}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       <FlatList
         data={visibleComplaints}
         keyExtractor={(item) => item.id}
@@ -347,11 +396,14 @@ export default function AdminComplaintsScreen() {
             complaint={item}
             resident={findResident(item)}
             onChangeStatus={() => handleChangeStatus(item)}
+            onOpen={() => {
+              if (!(item as any).viewed) markComplaintViewed(item.id);
+            }}
           />
         )}
         ListEmptyComponent={
           <Text style={[typography.body, { color: colors.text, textAlign: 'center', marginTop: spacing.xl }]}>
-            No complaints here yet.
+            {filter === 'All' ? 'No complaints here yet.' : `No ${filter.toLowerCase()} complaints.`}
           </Text>
         }
       />
@@ -509,6 +561,33 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  filterChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  filterCount: {
+    marginLeft: 6,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 5,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   listContent: {
     paddingHorizontal: spacing.md,

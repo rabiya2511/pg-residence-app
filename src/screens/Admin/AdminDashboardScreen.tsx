@@ -10,6 +10,7 @@ import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
 import { PG_UPI_ID, PG_PAYEE_NAME } from '../../constants/mockData';
 import { REPORTS } from './AdminReportsScreen';
+import { computeDues } from '../../utils/dues';
 import { useAdmin, isDailyGuestActiveNow, isPreBookedNow } from '../../context/AdminContext';
 
 // Name of the Room & Bed Management screen in your navigator.
@@ -81,9 +82,10 @@ export default function AdminDashboardScreen() {
   /* ------------------------- existing numbers ------------------------- */
   const activeResidents = adminResidents.filter((r) => !isPreBookedNow(r));
   const totalResidents = activeResidents.length;
-  const pendingResidents = activeResidents.filter((r) => r.rentStatus !== 'Paid');
-  const pendingRent = pendingResidents.length;
-  const pendingAmount = pendingResidents.reduce((s, r) => s + r.monthlyRent, 0);
+  // Same rule as the Rent tab and the Pending Dues screen: every resident whose rent is not Paid.
+  const pendingDuesList = computeDues(adminResidents, rooms, paymentRecords);
+  const pendingRent = pendingDuesList.length;
+  const pendingAmount = pendingDuesList.reduce((s, d) => s + d.outstanding, 0);
   const openComplaints = adminComplaints.filter((c) => c.status === 'Open').length;
   const vacatingCount = adminResidents.filter((r) => !!r.vacatingDate).length;
 
@@ -134,6 +136,7 @@ export default function AdminDashboardScreen() {
   const todaysCollection = rentToday + guestsToday;
 
   const openTickets = openComplaints;
+  const newTickets = adminComplaints.filter((c) => c.status === 'Open' && !(c as any).viewed).length;
   const inProgressTickets = adminComplaints.filter((c) => c.status === 'In Progress').length;
   const resolvedTickets = adminComplaints.filter((c) => c.status === 'Resolved').length;
 
@@ -182,7 +185,9 @@ export default function AdminDashboardScreen() {
   };
   const openManageProperties = () => {
     closeSwitch();
-    navigation.navigate('AdminProperties');
+    // Wait for the sheet to finish closing. On Android, navigating while a Modal is still
+    // closing can be swallowed or send the tap through to the wrong screen.
+    setTimeout(() => navigation.navigate('AdminProperties'), 350);
   };
 
   /* ------------------------- quick actions (all existing tabs kept) ------------------------- */
@@ -193,7 +198,6 @@ export default function AdminDashboardScreen() {
     { label: 'Monthly Revenue', value: `₹${totalMonthlyRevenue.toLocaleString()}`, icon: 'trending-up-outline', color: colors.success, onPress: () => navigation.navigate('AdminRevenue') },
     { label: 'Documents', value: pendingDocuments, icon: 'document-text-outline', color: colors.primary, onPress: () => navigation.navigate('AdminIdentityDocuments') },
     { label: 'Properties', value: properties.length, icon: 'business-outline', color: colors.warning, onPress: () => navigation.navigate('AdminProperties') },
-    { label: 'Day Guests', value: dailyGuests.length, icon: 'person-add-outline', color: colors.success, onPress: () => navigation.navigate('AdminDailyGuests') },
     { label: 'Vacating', value: vacatingCount, icon: 'exit-outline', color: colors.error, onPress: () => navigation.navigate('AdminVacating') },
     { label: 'Day Revenue', value: `₹${totalDayGuestRevenue.toLocaleString()}`, icon: 'calendar-outline', color: colors.success, onPress: () => navigation.navigate('AdminDayRevenue') },
     { label: 'Analytics', value: `${occupancyPercent}%`, icon: 'analytics-outline', color: colors.primary, onPress: () => navigation.navigate('AdminAnalytics') },
@@ -204,7 +208,8 @@ export default function AdminDashboardScreen() {
 
   const quickActions = [
     { label: 'Add Resident', value: '', icon: 'person-add-outline', color: colors.primary, onPress: () => navigation.navigate('AdminResidentForm', {}) },
-    { label: 'Add Day Guest', value: '', icon: 'add-circle-outline', color: colors.success, onPress: () => navigation.navigate('AdminDailyGuestForm') },
+    { label: 'Add Guests', value: dailyGuests.length, icon: 'person-add-outline', color: colors.success, onPress: () => navigation.navigate('AdminDailyGuests') },
+    { label: 'Pre-booking', value: preBookedCount, icon: 'bookmark-outline', color: colors.warning, onPress: () => navigation.navigate('AdminPreBookingList', { propertyId: activeProperty?.id }) },
     { label: 'Send Notice', value: '', icon: 'megaphone-outline', color: colors.primary, onPress: () => navigation.navigate('AdminNotices') },
     { label: 'Call', value: '', icon: 'call-outline', color: colors.success, onPress: () => navigation.navigate('AdminDialer') },
     ...stats,
@@ -453,27 +458,27 @@ export default function AdminDashboardScreen() {
             <View style={{ flex: 1, marginLeft: spacing.sm }}>
               <Text style={[typography.bodyBold, { color: colors.text }]}>Property Maintenance</Text>
               <Text style={[typography.caption, { color: colors.textMuted }]}>
-                {adminComplaints.length} Total Tickets · {inProgressTickets} In Progress
+                {adminComplaints.length} Total Tickets · {newTickets} New · {inProgressTickets} In Progress
               </Text>
             </View>
           </View>
           <View style={styles.maintRow}>
-            <View style={styles.maintItem}>
+            <TouchableOpacity style={styles.maintItem} activeOpacity={0.8} onPress={() => navigation.navigate('AdminComplaints', { filterStatus: 'Open' })}>
               <Text style={[typography.heading3, { color: colors.error }]}>{openTickets}</Text>
               <Text style={styles.tileLabel}>Open</Text>
-            </View>
-            <View style={styles.maintItem}>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.maintItem} activeOpacity={0.8} onPress={() => navigation.navigate('AdminComplaints', { filterStatus: 'In Progress' })}>
               <Text style={[typography.heading3, { color: colors.warning }]}>{inProgressTickets}</Text>
               <Text style={styles.tileLabel}>In Progress</Text>
-            </View>
-            <View style={styles.maintItem}>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.maintItem} activeOpacity={0.8} onPress={() => navigation.navigate('AdminComplaints', { filterStatus: 'Resolved' })}>
               <Text style={[typography.heading3, { color: colors.success }]}>{resolvedTickets}</Text>
               <Text style={styles.tileLabel}>Resolved</Text>
-            </View>
-            <View style={styles.maintItem}>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.maintItem} activeOpacity={0.8} onPress={() => navigation.navigate('AdminComplaints', { filterStatus: 'All' })}>
               <Text style={[typography.heading3, { color: colors.text }]}>{adminComplaints.length}</Text>
               <Text style={styles.tileLabel}>Total</Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {adminComplaints.length > 0 && (

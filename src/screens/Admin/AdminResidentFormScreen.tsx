@@ -25,6 +25,8 @@ import { typography } from '../../constants/typography';
 import { useAdmin, isDailyGuestActiveNow } from '../../context/AdminContext';
 import { AdminResident, AdminGender } from '../../constants/mockData';
 import TermsAgreement from '../../components/TermsAgreement';
+import PhoneInput from '../../components/common/PhoneInput';
+import { validatePhone, normalizePhone } from '../../utils/phone';
 
 type DepositStatus = 'Paid' | 'Not Paid' | 'No Advance';
 type VehicleType = 'Bicycle' | 'Two-Wheeler' | 'Four-Wheeler';
@@ -264,6 +266,9 @@ export default function AdminResidentFormScreen() {
   const [email, setEmail] = useState(existing?.email ?? '');
   const [guardianName, setGuardianName] = useState(existing?.guardianName ?? '');
   const [guardianPhone, setGuardianPhone] = useState(existing?.guardianPhone ?? '');
+  const [permanentAddress, setPermanentAddress] = useState(
+    ((existing as any)?.permanentAddress ?? (existing as any)?.address ?? '').toString()
+  );
   const [gender, setGender] = useState<AdminGender | null>(existing?.gender ?? null);
 
   // ---- Identity & documents ----
@@ -402,8 +407,9 @@ const handleSave = () => {
   if (!gender) return;
   const genderValue: AdminGender = gender;
 
-  if (phone.replace(/\D/g, '').length !== 10) {
-    Alert.alert('Invalid Phone Number', 'Please enter a 10-digit mobile number.');
+  const phoneError = validatePhone(phone, { label: 'phone number' });
+  if (phoneError) {
+    Alert.alert('Invalid Phone Number', phoneError);
     return;
   }
 
@@ -426,8 +432,9 @@ const handleSave = () => {
       return;
     }
 
-   if (guardianPhone.trim() && guardianPhone.replace(/\D/g, '').length !== 10) {
-      Alert.alert('Invalid Guardian Number', 'Please enter a valid 10-digit mobile number for the guardian.');
+   const guardianError = validatePhone(guardianPhone, { required: false, label: 'guardian number' });
+    if (guardianError) {
+      Alert.alert('Invalid Guardian Number', guardianError);
       return;
     }
 
@@ -477,7 +484,7 @@ const handleSave = () => {
     // Optional details — empty values are stored as undefined.
     const extras = {
       guardianName: guardianName.trim() || undefined,
-      guardianPhone: guardianPhone.trim() || undefined,
+      guardianPhone: guardianPhone.trim() ? normalizePhone(guardianPhone) : undefined,
       maintenanceFee: maintenanceFee.trim() ? toNum(maintenanceFee) : undefined,
       advanceDepositStatus: depositStatus,
       isPreBooking,
@@ -493,6 +500,7 @@ const handleSave = () => {
       officeIdUri: officeIdUri,
       bedNumber: effectiveBed ?? undefined,
       notes: notes.trim() || undefined,
+      permanentAddress: permanentAddress.trim() || undefined,
     };
 
     // Saves the government ID images into the Identity Documents list.
@@ -509,7 +517,7 @@ const handleSave = () => {
 
       updateResident(existing.id, {
         name: name.trim(),
-        phone: phone.trim(),
+        phone: normalizePhone(phone),
         email: email.trim(),
          gender: genderValue,
         joiningDate: joiningDateStr,
@@ -526,7 +534,7 @@ const handleSave = () => {
     } else {
       const newResident: Omit<AdminResident, 'id'> = {
         name: name.trim(),
-        phone: phone.trim(),
+        phone: normalizePhone(phone),
         email: email.trim(),
         gender: genderValue,
         propertyId,
@@ -615,25 +623,11 @@ const handleSave = () => {
           </View>
 
           <Field label="Full Name" value={name} onChangeText={setName} placeholder="e.g. Rahul Singh" />
-        <Field
-    label="Phone Number"
-    value={phone}
-    onChangeText={(t) => setPhone(t.replace(/\D/g, '').slice(0, 10))}
-    placeholder="10-digit mobile number"
-    keyboardType="phone-pad"
-    maxLength={10}
-  />
+          <PhoneInput label="Phone Number" value={phone} onChange={setPhone} required />
           <Field label="Email" value={email} onChangeText={setEmail} placeholder="e.g. rahul@example.com" keyboardType="email-address" />
 
           <Field label="Father / Guardian Name" value={guardianName} onChangeText={setGuardianName} placeholder="e.g. Suresh Singh" />
-          <Field
-            label="Father / Guardian Mobile No."
-            value={guardianPhone}
-            onChangeText={setGuardianPhone}
-            placeholder="10-digit mobile number"
-            keyboardType="phone-pad"
-            maxLength={10}
-          />
+          <PhoneInput label="Father / Guardian Mobile No." value={guardianPhone} onChange={setGuardianPhone} />
 
           <Text style={[typography.caption, styles.label]}>Gender</Text>
           <View style={styles.toggleRow}>
@@ -651,6 +645,19 @@ const handleSave = () => {
           {/* ---------------- Identity & Documents ---------------- */}
           <View style={styles.sectionCard}>
             <SectionTitle icon="shield-checkmark" title="IDENTITY & DOCUMENTS" />
+
+            <Text style={[typography.caption, styles.label]}>Permanent Address</Text>
+            <TextInput
+              style={[styles.input, { minHeight: 80, paddingTop: spacing.sm, marginBottom: spacing.md }]}
+              value={permanentAddress}
+              onChangeText={setPermanentAddress}
+              placeholder="House no., street, area, city, state, PIN"
+              placeholderTextColor={colors.textMuted}
+              multiline
+              numberOfLines={3}
+              maxLength={300}
+              textAlignVertical="top"
+            />
 
             <Text style={styles.subSectionTitle}>1. GOVERNMENT ID PROOF{isEdit ? '' : ' *'}</Text>
             <View style={styles.twoCol}>

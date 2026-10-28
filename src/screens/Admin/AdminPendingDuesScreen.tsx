@@ -20,20 +20,9 @@ import { useAdmin } from '../../context/AdminContext';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
 import { isPreBookedNow } from '../../context/AdminContext';
 import { openWhatsApp } from '../../utils/whatsapp';
+import { computeDues, Due } from '../../utils/dues';
 type View_ = 'rooms' | 'defaulters';
 type Bucket = 'All' | 'Over30' | 'From15To30' | 'Recent';
-
-type Due = {
-  resident: AdminResident;
-  roomId: string;
-  roomNumber: string;
-  floor: number | null;
-  capacity: number | null;
-  outstanding: number;
-  months: number;
-  oldestDue: Date;
-  daysOverdue: number;
-};
 
 type DueSection = {
   key: string;
@@ -44,27 +33,7 @@ type DueSection = {
   data: Due[];
 };
 
-const MONTHS_3 = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-
-// Parses "25 Sep 2026" and "Sep 25, 2026".
-function parseDue(str: string | null | undefined): Date | null {
-  if (!str) return null;
-  const s = str.trim();
-  const a = s.match(/^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*,?\s+(\d{4})$/);
-  if (a) {
-    const m = MONTHS_3.indexOf(a[2].toLowerCase());
-    return m === -1 ? null : new Date(Number(a[3]), m, Number(a[1]));
-  }
-  const b = s.match(/^([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2}),?\s+(\d{4})$/);
-  if (b) {
-    const m = MONTHS_3.indexOf(b[1].toLowerCase());
-    return m === -1 ? null : new Date(Number(b[3]), m, Number(b[2]));
-  }
-  return null;
-}
-
 const money = (n: number) => `₹${n.toLocaleString()}`;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const inBucket = (days: number, bucket: Bucket) =>
   bucket === 'All' ? true : bucket === 'Over30' ? days > 30 : bucket === 'From15To30' ? days >= 15 && days <= 30 : days < 15;
@@ -78,41 +47,8 @@ export default function AdminPendingDuesScreen() {
   const [search, setSearch] = useState('');
   const [whatsappVisible, setWhatsappVisible] = useState(false);
 
-  // One entry per resident who still owes rent (same rule as the dashboard's Pending Rent count).
-  const dues = useMemo<Due[]>(() => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-    return residents
-        .filter((r) => r.rentStatus !== 'Paid' && !isPreBookedNow(r))
-      .map((r) => {
-        const room = rooms.find((rm) => rm.id === r.roomId);
-        const unpaid = paymentRecords.filter((p) => p.residentId === r.id && p.status !== 'Paid');
-        const fallbackDue = new Date(now.getFullYear(), now.getMonth(), r.rentDueDay || 5);
-
-        let outstanding = r.monthlyRent;
-        let months = 1;
-        let oldestDue = fallbackDue;
-        if (unpaid.length > 0) {
-          outstanding = unpaid.reduce((sum, p) => sum + Math.max(0, p.amount - ((p as any).deduction ?? 0)), 0);
-          months = unpaid.length;
-          const dates = unpaid.map((p) => parseDue(p.dueDate)).filter((d): d is Date => !!d);
-          if (dates.length > 0) oldestDue = new Date(Math.min(...dates.map((d) => d.getTime())));
-        }
-
-        return {
-          resident: r,
-          roomId: room ? room.id : 'unassigned',
-          roomNumber: room ? room.roomNumber : '—',
-          floor: room ? room.floor : null,
-          capacity: room ? room.capacity : null,
-          outstanding,
-          months,
-          oldestDue,
-          daysOverdue: Math.max(0, Math.floor((today - oldestDue.getTime()) / DAY_MS)),
-        };
-      });
-  }, [residents, rooms, paymentRecords]);
+  // Shared with the dashboard (src/utils/dues.ts) so counts and amounts always match.
+  const dues = useMemo<Due[]>(() => computeDues(residents, rooms, paymentRecords), [residents, rooms, paymentRecords]);
 
   const totalOutstanding = dues.reduce((sum, d) => sum + d.outstanding, 0);
   const roomsAffected = new Set(dues.map((d) => d.roomId)).size;
@@ -183,13 +119,34 @@ export default function AdminPendingDuesScreen() {
       d.daysOverdue > 0 ? ` (${d.daysOverdue} days overdue)` : ''
     }. Please pay at the earliest. — ${propertyNameOf(d.resident)}`;
 
-    const reminderRecipients: WhatsAppRecipient[] = filtered.map((d) => ({
+  const reminderRecipients: WhatsAppRecipient[] = filtered.map((d) => ({
     id: d.resident.id,
     name: d.resident.name,
     phone: d.resident.phone,
-    profileImageUri: d.resident.profileImageUri,
     message: reminderMessage(d),
   }));
+
+  // "Detect Dues": scans every resident of this property and reports who has outstanding payments.
+  const detectDues = () => {
+    if (dues.length === 0) {
+      Alert.alert('Detect Dues', 'No resident has an outstanding payment right now.');
+      return;
+    }
+    const overdue = dues.filter((d) => d.daysOverdue > 0);
+    const names = [...dues]
+      .sort((a, b) => b.daysOverdue - a.daysOverdue)
+      .slice(0, 5)
+      .map((d) => `• ${d.resident.name} (Room ${d.roomNumber}) – ${money(d.outstanding)}`)
+      .join('\n');
+    setBucket('All');
+    setSearch('');
+    Alert.alert(
+      'Outstanding Payments Found',
+      `${dues.length} resident${dues.length === 1 ? '' : 's'} owe ${money(totalOutstanding)} in total.\n${overdue.length} overdue, ${
+        dues.length - overdue.length
+      } not yet due.\n\n${names}${dues.length > 5 ? `\n…and ${dues.length - 5} more` : ''}`
+    );
+  };
 
   const callResident = (phone: string) => Linking.openURL(`tel:${phone.replace(/\s/g, '')}`).catch(() => {});
 
@@ -262,6 +219,10 @@ export default function AdminPendingDuesScreen() {
               Remind All ({filtered.length})
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.reportButton} activeOpacity={0.85} onPress={detectDues}>
+            <Ionicons name="scan-outline" size={16} color={colors.primary} />
+            <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginLeft: 6 }]}>Detect</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.reportButton}
             activeOpacity={0.85}
@@ -324,7 +285,10 @@ export default function AdminPendingDuesScreen() {
           </View>
         )}
         <View style={{ flex: 1 }}>
-          <Text style={[typography.bodyBold, { color: colors.text }]}>{d.resident.name}</Text>
+          <Text style={[typography.bodyBold, { color: colors.text }]}>
+            {d.resident.name}
+            {isPreBookedNow(d.resident) ? '  · Pre-booking' : ''}
+          </Text>
           <Text style={[typography.caption, { color: colors.textMuted }]}>{d.resident.phone}</Text>
         </View>
         <View style={{ alignItems: 'flex-end' }}>
@@ -337,8 +301,9 @@ export default function AdminPendingDuesScreen() {
 
       <View style={styles.cardBottom}>
         <Text style={[typography.caption, { color: colors.textMuted, flex: 1 }]}>
-          {d.months} {d.months === 1 ? 'month' : 'months'} pending · since{' '}
+          {d.daysOverdue > 0 ? 'Overdue' : 'Pending'} · Due{' '}
           {d.oldestDue.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+          {d.months > 1 ? ` · ${d.months} months` : ''}
         </Text>
         <TouchableOpacity style={styles.iconBtn} onPress={() => callResident(d.resident.phone ?? '')}>
           <Ionicons name="call-outline" size={17} color={colors.primary} />

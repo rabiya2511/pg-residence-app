@@ -21,9 +21,9 @@ import { useMockAuth } from '../../context/MockAuthContext';
 // Demo logins: these are the test phone numbers saved in Firebase Console
 // (Authentication > Sign-in method > Phone > Phone numbers for testing).
 // Tapping one signs in through the normal Firebase phone login, so the real data loads.
-// Set SHOW_DEMO_LOGINS to false before you give the app to real users:
-// the demo buttons sign in to real accounts of your Firebase project.
-const SHOW_DEMO_LOGINS = true;
+// The demo buttons sign in to real accounts of your Firebase project, so they are shown
+// only while developing (Metro / debug builds). A release APK never shows them.
+const SHOW_DEMO_LOGINS = __DEV__;
 const DEMO_OTP = '123456';
 const DEMO_LOGINS = [
   { label: 'Demo Admin', phone: '98765 43210', icon: 'business-outline' },

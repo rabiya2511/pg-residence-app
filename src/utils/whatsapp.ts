@@ -1,28 +1,31 @@
 import { Alert, Linking } from 'react-native';
+import { whatsappTarget } from './phone';
 
 // Opens WhatsApp on THIS device with the resident's chat and the message already typed in.
 // The admin only has to press WhatsApp's own send button. Nothing is sent automatically.
 
-const DEFAULT_COUNTRY_CODE = '91'; // India
-
-// "98765 43210", "+91 98765-43210", "098765 43210" -> "919876543210"
-export function toWhatsAppNumber(phone: string, countryCode: string = DEFAULT_COUNTRY_CODE): string | null {
-  let d = (phone || '').replace(/[^\d]/g, '');
-  if (d.startsWith('00')) d = d.slice(2);
-  if (d.length === 10) d = countryCode + d;
-  else if (d.length === 11 && d.startsWith('0')) d = countryCode + d.slice(1);
-  return d.length >= 11 && d.length <= 15 ? d : null;
+// "98765 43210", "+91 98765-43210", "098765 43210" -> "919876543210". Null when the number is not usable.
+// (Number rules live in ./phone.ts; older numbers saved without a country code are read as +91.)
+export function toWhatsAppNumber(phone: string): string | null {
+  const t = whatsappTarget(phone);
+  return t.ok ? t.digits : null;
 }
 
-export async function openWhatsApp(phone: string, message: string): Promise<boolean> {
-  const number = toWhatsAppNumber(phone);
-  if (!number) {
-    Alert.alert('No valid phone number', 'This resident does not have a valid phone number saved.');
+// Checks the number FIRST. A missing, invalid or unsupported number shows a clear message and
+// WhatsApp is not opened. Returns true when WhatsApp was opened.
+export async function openWhatsApp(phone: string, message: string = ''): Promise<boolean> {
+  const target = whatsappTarget(phone);
+  if (!target.ok) {
+    Alert.alert('Cannot Open WhatsApp', target.message);
     return false;
   }
-  const text = encodeURIComponent(message);
+  const number = target.digits;
+  const text = message ? encodeURIComponent(message) : '';
   // First the WhatsApp app itself; if that is not possible, the wa.me link (opens WhatsApp or the browser).
-  const urls = [`whatsapp://send?phone=${number}&text=${text}`, `https://wa.me/${number}?text=${text}`];
+  const urls = [
+    `whatsapp://send?phone=${number}${text ? `&text=${text}` : ''}`,
+    `https://wa.me/${number}${text ? `?text=${text}` : ''}`,
+  ];
   for (const url of urls) {
     try {
       await Linking.openURL(url);

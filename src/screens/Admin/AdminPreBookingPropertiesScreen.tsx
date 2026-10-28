@@ -6,13 +6,16 @@ import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { useAdmin } from '../../context/AdminContext';
+import { useAdmin, isPreBookedNow } from '../../context/AdminContext';
 
 export default function AdminPreBookingPropertiesScreen() {
   const navigation = useNavigation<any>();
-  const { dailyGuests, properties } = useAdmin();
+  const { residents, properties, activeProperty } = useAdmin();
 
-  const upcomingGuests = dailyGuests.filter((g) => g.checkInTimestamp > Date.now());
+  // Pre-bookings are residents reserved ahead of check-in (same rule as the dashboard
+  // and Resident Management). The app loads one property at a time, so the active one is shown.
+  const preBooked = residents.filter((r) => isPreBookedNow(r));
+  const shown = activeProperty ? [activeProperty] : properties;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -25,8 +28,13 @@ export default function AdminPreBookingPropertiesScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {properties.map((property) => {
-          const count = upcomingGuests.filter((g) => g.propertyId === property.id).length;
+        {shown.length === 0 && (
+          <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
+            No property yet.
+          </Text>
+        )}
+        {shown.map((property) => {
+          const count = preBooked.filter((r) => r.propertyId === property.id).length;
           return (
             <TouchableOpacity
               key={property.id}
@@ -40,7 +48,7 @@ export default function AdminPreBookingPropertiesScreen() {
               <View style={styles.content}>
                 <Text style={[typography.bodyBold, { color: colors.text }]}>{property.name}</Text>
                 <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
-                  {count} upcoming booking{count !== 1 ? 's' : ''}
+                  {count} pre-booking{count !== 1 ? 's' : ''}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />

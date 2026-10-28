@@ -21,6 +21,7 @@ import { typography } from '../../constants/typography';
 import { AdminDailyGuest, AdminDailyGuestPaymentMethod, PG_UPI_ID, PG_PAYEE_NAME } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
 import { DailyGuestRegistrationForm } from './AdminDailyGuestFormScreen';
+import { openWhatsApp } from '../../utils/whatsapp';
 import {
   addDays,
   DAY_MS,
@@ -55,19 +56,13 @@ function buildUpiLink(amount: number, note: string): string {
   return `upi://pay?${params.toString()}`;
 }
 
-function waDigits(phone: string): string {
-  let d = (phone ?? '').replace(/[^\d]/g, '');
-  if (d.length === 10) d = `91${d}`;
-  return d;
-}
-
 const callGuest = (phone: string) =>
   Linking.openURL(`tel:${(phone ?? '').replace(/\s/g, '')}`).catch(() => Alert.alert('Unable to Call', 'Could not open the dialer.'));
 
-const whatsappGuest = (phone: string) =>
-  Linking.openURL(`https://wa.me/${waDigits(phone)}`).catch(() =>
-    Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.')
-  );
+// Checks the number first, then opens WhatsApp (clear messages for missing / invalid numbers).
+const whatsappGuest = (phone: string) => {
+  openWhatsApp(phone, '');
+};
 
 // ───────────────────────── pieces ─────────────────────────
 

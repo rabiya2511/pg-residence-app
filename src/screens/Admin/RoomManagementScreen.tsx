@@ -42,7 +42,7 @@ type RoomRow = {
 
 export default function RoomManagementScreen() {
   const navigation = useNavigation<any>();
-  const { rooms, residents, dailyGuests, properties, deleteRoom } = useAdmin();
+  const { rooms, residents, dailyGuests, properties, deleteRoom, activePropertyId } = useAdmin();
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
@@ -203,7 +203,11 @@ export default function RoomManagementScreen() {
     { key: 'vacant', label: `Vacant Rooms (${filterCounts.vacant})` },
   ];
 
-  const goAddRoom = () => navigation.navigate(ROOM_FORM_ROUTE);
+  // New rooms go to the property currently shown (or the active one when "All Properties" is selected).
+  const goAddRoom = () =>
+    navigation.navigate(ROOM_FORM_ROUTE, {
+      propertyId: propertyFilter !== 'all' ? propertyFilter : activePropertyId ?? properties[0]?.id,
+    });
   const goEditRoom = (room: RoomRow) =>
     navigation.navigate(ROOM_FORM_ROUTE, { roomId: room.id, propertyId: room.propertyId });
   const goAssign = (room: RoomRow) =>

@@ -31,6 +31,8 @@ import {
   PG_PAYEE_NAME,
 } from '../../constants/mockData';
 import TermsAgreement from '../../components/TermsAgreement';
+import PhoneInput from '../../components/common/PhoneInput';
+import { validatePhone, normalizePhone } from '../../utils/phone';
 import {
   addDays,
   diffDays,
@@ -387,9 +389,10 @@ export function DailyGuestRegistrationForm({
   const handleSave = () => {
     if (saving) return;
     if (!name.trim()) return Alert.alert('Missing Information', 'Please enter the guest name.');
-    if (phone.length !== 10) return Alert.alert('Invalid Phone Number', 'Please enter a valid 10-digit phone number.');
-    if (emergency && emergency.length !== 10)
-      return Alert.alert('Invalid Emergency Contact', 'The emergency contact must be a 10-digit number.');
+    const phoneError = validatePhone(phone, { label: 'guest phone number' });
+    if (phoneError) return Alert.alert('Invalid Phone Number', phoneError);
+    const emergencyError = validatePhone(emergency, { required: false, label: 'emergency contact' });
+    if (emergencyError) return Alert.alert('Invalid Emergency Contact', emergencyError);
     if (!gender) return Alert.alert('Select Gender', 'Please choose the guest gender.');
     if (!propertyId) return Alert.alert('Select Property', 'Please choose a property.');
     if (!roomId || !roomStats) return Alert.alert('Select Room', 'Please choose a room.');
@@ -408,7 +411,7 @@ export function DailyGuestRegistrationForm({
 
     const newGuest = addDailyGuest({
       name: name.trim(),
-      phone: phone.trim(),
+      phone: normalizePhone(phone),
       email: email.trim(),
       gender,
       propertyId,
@@ -424,7 +427,7 @@ export function DailyGuestRegistrationForm({
       paymentStatus: netRent === 0 || stayPaid >= netRent ? 'Paid' : 'Pending',
       paymentMethod: collected > 0 ? payMode : null,
       profileImageUri: profileUri,
-      emergencyContact: emergency.trim() || undefined,
+      emergencyContact: emergency.trim() ? normalizePhone(emergency) : undefined,
       permanentAddress: address.trim() || undefined,
       idDocType: idType,
       idDocNumber: idNumber.trim(),
@@ -508,27 +511,8 @@ export function DailyGuestRegistrationForm({
         {/* 2. Details */}
         <SectionCard icon="id-card-outline" title="2. Guest Details">
           <Field label="Guest Full Name *" value={name} onChangeText={setName} placeholder="e.g. Rahul Singh" autoCapitalize="words" />
-          <View style={styles.twoCol}>
-            <Field
-              label="Phone Number * (10 Digits)"
-              value={phone}
-              onChangeText={(t) => setPhone(t.replace(/\D/g, '').slice(0, 10))}
-              placeholder="9876543210"
-              keyboardType="phone-pad"
-              maxLength={10}
-              hint={`${phone.length}/10 digits`}
-              containerStyle={styles.colField}
-            />
-            <Field
-              label="Emergency Contact"
-              value={emergency}
-              onChangeText={(t) => setEmergency(t.replace(/\D/g, '').slice(0, 10))}
-              placeholder="10-digit number"
-              keyboardType="phone-pad"
-              maxLength={10}
-              containerStyle={styles.colField}
-            />
-          </View>
+          <PhoneInput label="Phone Number" value={phone} onChange={setPhone} required />
+          <PhoneInput label="Emergency Contact" value={emergency} onChange={setEmergency} />
           <Field label="Email Address (Optional)" value={email} onChangeText={setEmail} placeholder="e.g. rahul@example.com" keyboardType="email-address" />
           <Field label="Permanent Address / Hometown" value={address} onChangeText={setAddress} placeholder="Village / Town, District, State" multiline />
 

@@ -23,7 +23,6 @@ import { typography } from '../../constants/typography';
 import { AdminResident, Room, Property, MONTHLY_RENT_BY_CAPACITY } from '../../constants/mockData';
 import { useAdmin, isDailyGuestActiveNow, isPreBookedNow, ArchivedResident } from '../../context/AdminContext';
 import { exportResidentsToExcel } from '../../services/exportResidentsToExcel';
-import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 const WHATSAPP_GREEN = '#25D366';
 const AVATAR_ORANGE = '#F59E0B';
@@ -129,10 +128,15 @@ function buildBeds(occupants: Occupant[], capacity: number): (Occupant | null)[]
 }
 
 // ───────────────────────── list cards ─────────────────────────
+
 function Avatar({ name, uri, muted }: { name: string; uri?: string | null; muted?: boolean }) {
   return (
-    <View style={muted ? { opacity: 0.5 } : undefined}>
-      <ResidentAvatar uri={uri} name={name} size={40} />
+    <View style={[styles.avatar, muted && { backgroundColor: colors.textMuted }]}>
+      {uri ? (
+        <Image source={{ uri }} style={styles.avatarImage} />
+      ) : (
+        <Text style={[typography.bodyBold, { color: colors.white }]}>{initialOf(name)}</Text>
+      )}
     </View>
   );
 }
@@ -373,6 +377,7 @@ export default function AdminResidentsScreen() {
     residents,
     archivedResidents,
     archiveResident,
+    activatePreBooking,
     restoreResident,
     permanentlyDeleteResident,
     updateResident,
@@ -698,6 +703,27 @@ export default function AdminResidentsScreen() {
     );
   };
 
+  // Pre-booking -> Active. The status only changes after the database confirms.
+  const confirmActivate = (resident: AdminResident) => {
+    const future = isPreBookedNow(resident);
+    Alert.alert(
+      'Pre-booking to Active',
+      `Move ${resident.name} (Room ${getRoomNumber(rooms, resident.roomId)}) to Active residents?` +
+        (future ? `\n\nThe joining date will change from ${resident.joiningDate} to today. All other details are kept.` : ''),
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Activate',
+          onPress: async () => {
+            const res = await activatePreBooking(resident.id);
+            if (!res.ok) Alert.alert('Could Not Activate', res.message ?? 'Please try again.');
+            else Alert.alert('Resident Activated', `${resident.name} is now an active resident.`);
+          },
+        },
+      ]
+    );
+  };
+
   const openRestore = (resident: ArchivedResident) => {
     const oldRoomFree = roomsWithFreeBeds.some((x) => x.room.id === resident.roomId);
     setRestoreTarget(resident);
@@ -912,6 +938,16 @@ export default function AdminResidentsScreen() {
                 color: colors.text,
                 onPress: () => navigation.navigate('AdminResidentForm', { residentId: menuTarget!.id }),
               },
+              ...(menuTarget?.isPreBooking
+                ? [
+                    {
+                      icon: 'checkmark-done-outline',
+                      label: 'Pre-booking to Active',
+                      color: colors.success,
+                      onPress: () => confirmActivate(menuTarget!),
+                    },
+                  ]
+                : []),
               {
                 icon: 'logo-whatsapp',
                 label: menuTarget && needsRentReminder(menuTarget) ? 'Send Rent Reminder' : 'WhatsApp Chat',

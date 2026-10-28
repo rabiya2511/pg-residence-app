@@ -11,6 +11,7 @@ import {
   Platform,
   Modal,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,6 +25,8 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
 import { PropertyAddress, HOUSE_GUIDELINE_PRESETS } from '../../constants/mockData';
+import PhoneInput from '../../components/common/PhoneInput';
+import { validatePhone, normalizePhone } from '../../utils/phone';
 
 async function getImageHash(uri: string): Promise<string | null> {
   try {
@@ -44,11 +47,10 @@ export default function AdminPropertyFormScreen() {
   const insets = useSafeAreaInsets();
   const {
     properties,
-    addProperty,
+    createProperty,
     addPropertyImages,
     removePropertyImage,
     updatePropertyDetails,
-    generateRoomsForProperty,
   } = useAdmin();
 
   const propertyId: string | undefined = route.params?.propertyId;
@@ -74,7 +76,9 @@ export default function AdminPropertyFormScreen() {
 
   const [pickerVisible, setPickerVisible] = useState(false);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
-  const isCreatingRef = useRef(false);
+  // While a save is running the buttons are locked, so repeated taps can never create duplicates.
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const images = existing?.images ?? [];
 
   // Fill the form with the saved values once the property has loaded (only once,
@@ -106,27 +110,27 @@ export default function AdminPropertyFormScreen() {
   };
 
   const pickLogo = async () => {
-  try {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
-    if (!result.canceled && result.assets?.length) {
-      setLogoUri(result.assets[0].uri);
-    }
-  } catch {
-    // The system photo picker is missing (common on emulators): fall back to the file browser.
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'image/*',
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
       if (!result.canceled && result.assets?.length) {
         setLogoUri(result.assets[0].uri);
       }
     } catch {
-      Alert.alert('Unable to Open Gallery', 'Could not open the photo picker on this device.');
+      // The system photo picker is missing (common on emulators): fall back to the file browser.
+      try {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: 'image/*',
+          copyToCacheDirectory: true,
+          multiple: false,
+        });
+        if (!result.canceled && result.assets?.length) {
+          setLogoUri(result.assets[0].uri);
+        }
+      } catch {
+        Alert.alert('Unable to Open Gallery', 'Could not open the photo picker on this device.');
+      }
     }
-  }
-};
+  };
 
   const filterOutDuplicates = async (candidateUris: string[]): Promise<string[]> => {
     if (!existing) return candidateUris;
@@ -207,15 +211,44 @@ export default function AdminPropertyFormScreen() {
     ]);
   };
 
+  // Checks every field and shows ONE clear message for the first problem found.
   const validate = (): boolean => {
-    if (!name.trim()) {
-      Alert.alert('Missing Name', 'Please enter a property name.');
+    const fail = (title: string, message: string) => {
+      Alert.alert(title, message);
       return false;
+    };
+
+    const trimmedName = name.trim();
+    if (!trimmedName) return fail('Missing Name', 'Please enter a property name.');
+    if (trimmedName.length < 2) return fail('Name Too Short', 'The property name must have at least 2 characters.');
+
+    // The same name cannot be used twice (ignoring capital letters and extra spaces).
+    const clash = properties.find(
+      (p) => p.id !== propertyId && (p.name ?? '').trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (clash) return fail('Property Already Exists', `You already have a property named "${clash.name}". Please use a different name.`);
+
+    if (!fullAddress.trim()) return fail('Missing Address', 'Please enter the full address.');
+
+    if (floors.trim() !== '') {
+      const f = Number(floors);
+      if (!Number.isInteger(f) || f < 0 || f > 100) return fail('Invalid Floors', 'Floors must be a whole number between 0 and 100.');
     }
-    if (!fullAddress.trim()) {
-      Alert.alert('Missing Address', 'Please enter the full address.');
-      return false;
+
+    const phoneError = validatePhone(contactPhone, { required: false, label: 'contact phone' });
+    if (phoneError) return fail('Invalid Phone Number', phoneError);
+
+    if (standardRent.trim() !== '') {
+      const r = Number(standardRent);
+      if (!Number.isFinite(r) || r < 0) return fail('Invalid Rent', 'Standard rent must be a valid amount.');
     }
+
+    if (!isEdit && autoGenRooms.trim() !== '') {
+      const n = Number(autoGenRooms);
+      if (!Number.isInteger(n) || n < 0 || n > 500) return fail('Invalid Room Count', 'Auto Gen Rooms must be a whole number between 0 and 500.');
+      if (n > 0 && !(Number(floors) > 0)) return fail('Floors Needed', 'Enter the number of floors so the rooms can be spread across them.');
+    }
+
     return true;
   };
 
@@ -226,52 +259,81 @@ export default function AdminPropertyFormScreen() {
     pinCode: existing?.addressDetails?.pinCode ?? '',
   });
 
-  const handleCreateProperty = () => {
+  const handleCreateProperty = async () => {
+    if (savingRef.current) return;
     if (!validate()) return;
-    if (isCreatingRef.current) return;
-    isCreatingRef.current = true;
+    savingRef.current = true;
+    setSaving(true);
 
     const floorsNum = Number(floors) || 0;
     const roomsNum = Number(autoGenRooms) || 0;
     const rentNum = Number(standardRent) || undefined;
 
-    const created = addProperty(name.trim(), {
-      addressDetails: buildAddress(),
-      floors: floorsNum || undefined,
-      branchManager: branchManager.trim() || undefined,
-      contactPhone: contactPhone.trim() || undefined,
-      standardRent: rentNum,
-      googleReviewLink: googleReviewLink.trim() || undefined,
-      houseGuidelines: houseGuidelines.trim() || undefined,
-      logoUri,
-      upiId: upiId.trim() || null,
-      whatsappGroupLink: whatsappGroupLink.trim() || null,
-    });
+    try {
+      const result = await createProperty(
+        name.trim(),
+        {
+          addressDetails: buildAddress(),
+          floors: floorsNum || undefined,
+          branchManager: branchManager.trim() || undefined,
+          contactPhone: contactPhone.trim() ? normalizePhone(contactPhone) : undefined,
+          standardRent: rentNum,
+          googleReviewLink: googleReviewLink.trim() || undefined,
+          houseGuidelines: houseGuidelines.trim() || undefined,
+          logoUri,
+          upiId: upiId.trim() || null,
+          whatsappGroupLink: whatsappGroupLink.trim() || null,
+        },
+        floorsNum > 0 && roomsNum > 0 ? { floors: floorsNum, totalRooms: roomsNum, capacity: 2 } : undefined
+      );
 
-    if (floorsNum > 0 && roomsNum > 0) {
-      generateRoomsForProperty(created.id, floorsNum, roomsNum, 2);
+      if (!result.ok) {
+        // Stay on the form with everything the admin typed still in place.
+        Alert.alert('Could Not Create Property', result.message ?? 'Please try again.');
+        return;
+      }
+
+      // Success: confirm, then leave the form so the new property is visible in the list.
+      // (Photos can be added afterwards from the property's edit screen.)
+      Alert.alert('Property Created', `"${name.trim()}" has been added and is now your active property.`, [
+        { text: 'OK', onPress: () => navigation.goBack() },
+      ]);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-
-    navigation.replace('AdminPropertyForm', { propertyId: created.id });
   };
 
-  const handleSaveDetails = () => {
-    if (!existing) return;
+  const handleSaveDetails = async () => {
+    if (!existing || savingRef.current) return;
     if (!validate()) return;
-    updatePropertyDetails(existing.id, {
-      name: name.trim(),
-      addressDetails: buildAddress(),
-      floors: Number(floors) || undefined,
-      branchManager: branchManager.trim(),
-      contactPhone: contactPhone.trim(),
-      standardRent: Number(standardRent) || undefined,
-      googleReviewLink: googleReviewLink.trim(),
-      houseGuidelines: houseGuidelines.trim(),
-      logoUri,
-      upiId: upiId.trim() || null,
-      whatsappGroupLink: whatsappGroupLink.trim() || null,
-    });
-    Alert.alert('Property Updated', 'Changes have been saved.');
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const result = await updatePropertyDetails(existing.id, {
+        name: name.trim(),
+        addressDetails: buildAddress(),
+        floors: Number(floors) || undefined,
+        branchManager: branchManager.trim(),
+        contactPhone: contactPhone.trim() ? normalizePhone(contactPhone) : '',
+        standardRent: Number(standardRent) || undefined,
+        googleReviewLink: googleReviewLink.trim(),
+        houseGuidelines: houseGuidelines.trim(),
+        logoUri,
+        upiId: upiId.trim() || null,
+        whatsappGroupLink: whatsappGroupLink.trim() || null,
+      });
+      if (!result.ok) {
+        Alert.alert('Could Not Save Changes', result.message ?? 'Please try again.');
+        return;
+      }
+      Alert.alert('Property Updated', 'Changes have been saved.', [
+        { text: 'OK', onPress: () => navigation.goBack() },
+      ]);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const formReady = !isEdit || !!existing;
@@ -279,7 +341,7 @@ export default function AdminPropertyFormScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} disabled={saving}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={[typography.heading3, { color: colors.text }]}>
@@ -318,10 +380,8 @@ export default function AdminPropertyFormScreen() {
 
               {/* ───── Contact & pricing ───── */}
               <Section icon="call-outline" title="Contact & Pricing">
-                <View style={styles.row}>
-                  <Field label="Branch Manager" value={branchManager} onChangeText={setBranchManager} placeholder="Name" containerStyle={styles.rowField} />
-                  <Field label="Contact Phone" value={contactPhone} onChangeText={setContactPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" containerStyle={styles.rowField} />
-                </View>
+                <Field label="Branch Manager" value={branchManager} onChangeText={setBranchManager} placeholder="Name" />
+                <PhoneInput label="Contact Phone" value={contactPhone} onChange={setContactPhone} />
                 <View style={styles.row}>
                   <Field label="Standard Rent (₹)" value={standardRent} onChangeText={setStandardRent} placeholder="12000" keyboardType="numeric" containerStyle={styles.rowField} />
                   {!isEdit && (
@@ -468,17 +528,30 @@ export default function AdminPropertyFormScreen() {
         {/* Fixed action bar */}
         {formReady && (
           <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-            <TouchableOpacity style={styles.secondaryButton} activeOpacity={0.8} onPress={() => navigation.goBack()}>
+            <TouchableOpacity
+              style={[styles.secondaryButton, saving && { opacity: 0.5 }]}
+              activeOpacity={0.8}
+              onPress={() => navigation.goBack()}
+              disabled={saving}
+            >
               <Text style={[typography.button, { color: colors.text }]}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.primaryButton}
+              style={[styles.primaryButton, saving && { opacity: 0.7 }]}
               activeOpacity={0.85}
               onPress={isEdit ? handleSaveDetails : handleCreateProperty}
+              disabled={saving}
             >
-              <Text style={[typography.button, { color: colors.white }]}>
-                {isEdit ? 'Save Changes' : 'Create Property'}
-              </Text>
+              {saving ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <ActivityIndicator color={colors.white} size="small" />
+                  <Text style={[typography.button, { color: colors.white, marginLeft: spacing.sm }]}>Saving...</Text>
+                </View>
+              ) : (
+                <Text style={[typography.button, { color: colors.white }]}>
+                  {isEdit ? 'Save Changes' : 'Create Property'}
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
         )}

@@ -10,7 +10,7 @@ import * as XLSX from 'xlsx';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { useAdmin, isDailyGuestActiveNow } from '../../context/AdminContext';
+import { useAdmin, isDailyGuestActiveNow, isPreBookedNow } from '../../context/AdminContext';
 import { logReportHistory } from '../../services/reportsService';
 
 type DateRangeKey = 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Last Month' | 'This Year' | 'All Records';
@@ -112,7 +112,11 @@ export default function AdminReportDetailScreen() {
   const propertyId = properties[0]?.id;
 
   const [dateRange, setDateRange] = useState<DateRangeKey>(
-    DATE_RANGE_OPTIONS.includes(range as DateRangeKey) ? (range as DateRangeKey) : 'This Month'
+    DATE_RANGE_OPTIONS.includes(range as DateRangeKey)
+      ? (range as DateRangeKey)
+      : reportId === 'pre-bookings'
+      ? 'All Records' // pre-bookings are future joiners, so don't hide next month's by default
+      : 'This Month'
   );
   const [exporting, setExporting] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
@@ -231,13 +235,40 @@ export default function AdminReportDetailScreen() {
       }
 
       case 'pre-bookings': {
-        const upcoming = dailyGuests.filter((g) => g.checkInTimestamp > Date.now());
-        kpis.push({ label: 'Upcoming Bookings', value: String(upcoming.length) });
-        upcoming.forEach((g) => {
-          rows.push({ primary: g.name, secondary: `${getRoomLabel(g.roomId)} · ${getPropertyName(g.propertyId)}`, tertiary: `Checking in ${g.checkInDate} · ${g.numDays} day(s)` });
+        // Pre-bookings are residents reserved ahead of check-in (same rule as the dashboard and
+        // Resident Management: marked Pre-booking AND joining date still in the future).
+        // The date range filters on the expected joining date.
+        const list = residents
+          .filter((r) => isPreBookedNow(r))
+          .filter((r) => dateRange === 'All Records' || inRange(parseDisplayDate(r.joiningDate), start, end))
+          .sort((a, b) => (parseDisplayDate(a.joiningDate)?.getTime() ?? 0) - (parseDisplayDate(b.joiningDate)?.getTime() ?? 0));
+        const advancePaid = list.filter((r) => r.advanceDepositStatus === 'Paid').length;
+        kpis.push(
+          { label: 'Pre-Bookings', value: String(list.length) },
+          { label: 'Advance Paid', value: String(advancePaid), color: colors.success },
+          { label: 'Expected Rent', value: `₹${list.reduce((s, r) => s + (r.monthlyRent || 0), 0).toLocaleString()}` }
+        );
+        list.forEach((r) => {
+          rows.push({
+            primary: r.name,
+            secondary: `${getRoomLabel(r.roomId)} · ${getPropertyName(r.propertyId)}`,
+            tertiary: `Joining ${r.joiningDate} · ₹${(r.monthlyRent || 0).toLocaleString()}/month`,
+            badge: {
+              label: r.advanceDepositStatus === 'Paid' ? 'Advance Paid' : r.advanceDepositStatus === 'Not Paid' ? 'Advance Pending' : 'No Advance',
+              color: r.advanceDepositStatus === 'Paid' ? colors.success : colors.warning,
+            },
+          });
         });
-        columns = ['Name', 'Phone', 'Room', 'Property', 'Check-In', 'Days', 'Amount'];
-        pdfRows = upcoming.map((g) => [g.name, g.phone, getRoomLabel(g.roomId), getPropertyName(g.propertyId), g.checkInDate, String(g.numDays), `₹${g.totalAmount}`]);
+        columns = ['Name', 'Phone', 'Room', 'Property', 'Joining Date', 'Monthly Rent', 'Advance'];
+        pdfRows = list.map((r) => [
+          r.name,
+          r.phone,
+          getRoomLabel(r.roomId),
+          getPropertyName(r.propertyId),
+          r.joiningDate,
+          `₹${r.monthlyRent}`,
+          r.advanceDepositStatus === 'Paid' ? `Paid ₹${r.securityDeposit}` : r.advanceDepositStatus === 'Not Paid' ? `Pending ₹${r.securityDeposit}` : 'No Advance',
+        ]);
         break;
       }
 

@@ -16,6 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
 import { spacing, radius } from '../constants/spacing';
 import { typography } from '../constants/typography';
+import { openWhatsApp } from '../utils/whatsapp';
+import { parsePhone, whatsappTarget } from '../utils/phone';
 
 /* ------------------------------------------------------------------ */
 /* Contact store                                                       */
@@ -103,13 +105,11 @@ export function useSpeedDialContacts(propertyId: string | null): SpeedDialContac
 
 const digitsOnly = (s: string) => s.replace(/\D/g, '');
 
-// A normal mobile number (10 digits, or 91 + 10 digits) can use WhatsApp;
+// A real mobile number (with or without its country code) can use WhatsApp;
 // short codes like 100 / 108 cannot.
 function whatsappNumber(phone: string): string | null {
-  const d = digitsOnly(phone);
-  if (d.length === 10) return `91${d}`;
-  if (d.length === 12 && d.startsWith('91')) return d;
-  return null;
+  const t = whatsappTarget(phone);
+  return t.ok ? t.digits : null;
 }
 
 const CATEGORY_ORDER = ['Emergency', 'Police', 'Fire', 'Ambulance', 'Doctor', 'Plumber', 'Electrician', 'Carpenter', 'Gas', 'Other'];
@@ -149,14 +149,8 @@ export default function SpeedDialContacts({
     }
   };
 
-  const whatsapp = async (number: string) => {
-    const wa = whatsappNumber(number);
-    if (!wa) return;
-    try {
-      await Linking.openURL(`https://wa.me/${wa}`);
-    } catch {
-      Alert.alert('WhatsApp Unavailable', 'Could not open WhatsApp on this device.');
-    }
+  const whatsapp = (number: string) => {
+    openWhatsApp(number, ''); // checks the number first and explains any problem
   };
 
   const confirmDelete = (c: SpeedDialContact) => {
@@ -179,11 +173,21 @@ export default function SpeedDialContacts({
       Alert.alert('Missing Name', 'Please enter a name, e.g. "Ravi (Plumber)".');
       return;
     }
-    if (digits.length < 3 || digits.length > 15) {
+    // Short emergency codes (100, 108, 1091...) are allowed as they are.
+    // Any other number must be a valid mobile number, saved with its country code.
+    let toSave = phone.trim();
+    if (digits.length > 6) {
+      const parsed = parsePhone(phone);
+      if (!parsed.ok) {
+        Alert.alert('Invalid Number', parsed.message);
+        return;
+      }
+      toSave = parsed.e164;
+    } else if (digits.length < 3) {
       Alert.alert('Invalid Number', 'Please enter a valid phone number.');
       return;
     }
-    addSpeedDialContact({ name: name.trim(), category, phone: phone.trim(), propertyId });
+    addSpeedDialContact({ name: name.trim(), category, phone: toSave, propertyId });
     setModalVisible(false);
   };
 
@@ -300,7 +304,7 @@ export default function SpeedDialContacts({
                   placeholderTextColor={colors.textMuted}
                 />
 
-                <Text style={[typography.caption, styles.label]}>Phone Number</Text>
+                <Text style={[typography.caption, styles.label]}>Phone Number (with country code, e.g. +91 98765 43210)</Text>
                 <TextInput
                   style={styles.input}
                   value={phone}

@@ -18,7 +18,8 @@ import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
 import { AdminResident } from '../../constants/mockData';
 import SpeedDialContacts from '../../components/SpeedDialContacts';
-import ResidentAvatar from '../../components/common/ResidentAvatar';
+import { openWhatsApp } from '../../utils/whatsapp';
+import { formatPhoneDisplay } from '../../utils/phone';
 
 type TabKey = 'room' | 'dialpad' | 'speed';
 
@@ -33,11 +34,9 @@ function handleCall(phone: string, enabled: boolean) {
   });
 }
 
+// Validates the number (and adds the country code) before opening WhatsApp.
 function handleWhatsApp(phone: string) {
-  const cleaned = phone.replace(/[^\d]/g, '');
-  Linking.openURL(`https://wa.me/${cleaned}`).catch(() => {
-    Alert.alert('Unable to Open WhatsApp', 'Please make sure WhatsApp is installed.');
-  });
+  openWhatsApp(phone, '');
 }
 
 function ResidentCallCard({
@@ -49,16 +48,19 @@ function ResidentCallCard({
   roomLabel?: string;
   callingEnabled: boolean;
 }) {
+  const initial = resident.name.trim().charAt(0).toUpperCase() || '?';
   return (
     <View style={styles.residentCard}>
       <View style={styles.residentTopRow}>
-        <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={40} />
+        <View style={styles.avatar}>
+          <Text style={[typography.bodyBold, { color: colors.white }]}>{initial}</Text>
+        </View>
         <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
           <View style={styles.phoneRow}>
             <Ionicons name="call-outline" size={13} color={colors.textMuted} />
             <Text style={[typography.caption, { color: colors.textMuted, marginLeft: 4 }]}>
-              {resident.phone}
+              {formatPhoneDisplay(resident.phone)}
             </Text>
           </View>
           <View style={styles.tagRow}>
@@ -112,7 +114,17 @@ function ResidentCallCard({
 
 export default function AdminDialerScreen() {
   const navigation = useNavigation<any>();
-  const { residents, rooms, properties, activeProperty, activePropertyId } = useAdmin();
+  const { residents: allResidents, rooms: allRooms, activeProperty, activePropertyId } = useAdmin();
+
+  // Only the ACTIVE property's people and rooms are ever shown here.
+  const residents = useMemo(
+    () => allResidents.filter((r) => !!activePropertyId && r.propertyId === activePropertyId),
+    [allResidents, activePropertyId]
+  );
+  const rooms = useMemo(
+    () => allRooms.filter((r) => !!activePropertyId && r.propertyId === activePropertyId),
+    [allRooms, activePropertyId]
+  );
 
   const [tab, setTab] = useState<TabKey>('room');
   const [callingEnabled, setCallingEnabled] = useState(true);
@@ -168,7 +180,7 @@ export default function AdminDialerScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
+          <View style={styles.header}>
         <Text style={[typography.heading3, { color: colors.text }]}>Smart Dialer</Text>
       </View>
 
@@ -492,6 +504,14 @@ const styles = StyleSheet.create({
   residentTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+  },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   phoneRow: {
     flexDirection: 'row',
