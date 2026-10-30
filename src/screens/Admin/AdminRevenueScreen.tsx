@@ -8,7 +8,7 @@ import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { useAdmin } from '../../context/AdminContext';
+import { useAdmin, isPreBookedNow } from '../../context/AdminContext';
 
 const CHART_HEIGHT = 160;
 
@@ -290,8 +290,14 @@ export default function AdminRevenueScreen() {
 
   /* ------------------------- collection status (rent) for the month in focus ------------------------- */
   const focusYm = sel.kind === 'month' ? sel.ym : sel.kind === 'day' ? sel.key.slice(0, 7) : sel.from.slice(0, 7);
+  // Dues are counted for CURRENT residents only. Payments already received stay in the totals,
+  // but unpaid rent of vacated, archived or deleted residents is not a due any more.
+  const currentResidentIds = new Set(residents.filter((r) => !isPreBookedNow(r)).map((r) => r.id));
   const focusRecords = paymentRecords.filter(
-    (p) => p.month === ymLabel(focusYm) && !(p.status === 'Paid' && (p as any).revenueCleared)
+    (p) =>
+      p.month === ymLabel(focusYm) &&
+      !(p.status === 'Paid' && (p as any).revenueCleared) &&
+      (p.status === 'Paid' || currentResidentIds.has(p.residentId))
   );
   const overallAmount = focusRecords.reduce((s, p) => s + p.amount, 0);
   const collectedAmount = focusRecords.filter((p) => p.status === 'Paid').reduce((s, p) => s + p.amount, 0);

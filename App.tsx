@@ -14,7 +14,10 @@ import { DocumentsProvider } from './src/context/DocumentsContext';
 import { ResidentProvider } from './src/context/ResidentContext';
 import { PaymentMethodsProvider } from './src/context/PaymentMethodsContext';
 import { CommunicationsProvider } from './src/context/CommunicationsContext';
-
+import { StatusBar } from 'react-native';
+import { colors } from './src/constants/colors';
+   <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+   
 function NotificationScheduler() {
   const { rentStatus } = useRent();
 

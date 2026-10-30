@@ -295,11 +295,27 @@ export default function AdminPendingDuesScreen() {
         </View>
         <View style={{ alignItems: 'flex-end' }}>
           <Text style={[typography.heading3, { color: colors.error }]}>{money(d.outstanding)}</Text>
+          {d.deduction > 0 && (
+            <Text style={[typography.caption, { color: colors.textMuted }]}>
+              <Text style={{ textDecorationLine: 'line-through' }}>{money(d.gross)}</Text>
+              {`  −${money(d.deduction)}`}
+            </Text>
+          )}
           <Text style={[typography.caption, { color: daysColor(d.daysOverdue), fontWeight: '700' }]}>
             {d.daysOverdue > 0 ? `${d.daysOverdue} days overdue` : 'Due soon'}
           </Text>
         </View>
       </View>
+
+      {d.deduction > 0 && (
+        <View style={styles.deductionRow}>
+          <Ionicons name="remove-circle-outline" size={14} color={colors.primary} />
+          <Text style={[typography.caption, { color: colors.primary, marginLeft: 4, flex: 1 }]} numberOfLines={2}>
+            Deduction {money(d.deduction)}
+            {d.deductionReason ? ` · ${d.deductionReason}` : ''}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.cardBottom}>
         <Text style={[typography.caption, { color: colors.textMuted, flex: 1 }]}>
@@ -410,6 +426,7 @@ const styles = StyleSheet.create({
   card: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginBottom: spacing.sm },
   cardTop: { flexDirection: 'row', alignItems: 'center' },
   roomBadge: { backgroundColor: colors.primaryLight, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 4, marginRight: spacing.sm },
+  deductionRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.primaryLight, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 4, marginTop: spacing.sm },
   cardBottom: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, gap: spacing.xs },
   iconBtn: { width: 34, height: 34, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
   paidBtn: { backgroundColor: colors.success, borderRadius: radius.md, paddingHorizontal: spacing.sm, height: 34, alignItems: 'center', justifyContent: 'center' },

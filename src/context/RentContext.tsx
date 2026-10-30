@@ -4,7 +4,12 @@ import { useMockAuth } from './MockAuthContext';
 import { PaymentRecord } from '../constants/mockData';
 
 type RentStatusType = {
+  /** What the resident actually has to pay: rent minus any deduction the admin entered. */
   amount: number;
+  /** Rent before the deduction, the deduction itself and the admin's note (for display). */
+  grossAmount: number;
+  deduction: number;
+  deductionReason: string | null;
   monthLabel: string;
   dueDate: Date;
   dueInDays: number;
@@ -45,13 +50,23 @@ export function RentProvider({ children }: { children: ReactNode }) {
     : now;
   const dueInDays = Math.ceil((dueDateObj.getTime() - now.getTime()) / msPerDay);
 
+  // An unpaid record still holds the full rent plus the deduction the admin entered on the Rent screen;
+  // a paid record already holds the amount actually paid (rent minus deduction).
+  const recordAmount = currentRecord?.amount ?? resident?.monthlyRent ?? 0;
+  const deduction = Math.min(recordAmount, Number((currentRecord as any)?.deduction) || 0);
+  const isPaid = currentRecord?.status === 'Paid';
+  const amountToPay = isPaid ? recordAmount : Math.max(0, recordAmount - deduction);
+
   const rentStatus: RentStatusType = {
-    amount: currentRecord?.amount ?? resident?.monthlyRent ?? 0,
+    amount: amountToPay,
+    grossAmount: isPaid ? recordAmount + deduction : recordAmount,
+    deduction,
+    deductionReason: deduction > 0 ? (currentRecord as any)?.deductionReason ?? null : null,
     monthLabel: `${now.toLocaleDateString('en-US', { month: 'long' })} Rent`,
     dueDate: dueDateObj,
     dueInDays,
-    status: currentRecord?.status === 'Paid' ? 'Paid' : dueInDays < 0 ? 'Overdue' : 'Pending',
-    isPaid: currentRecord?.status === 'Paid',
+    status: isPaid ? 'Paid' : dueInDays < 0 ? 'Overdue' : 'Pending',
+    isPaid,
   };
 
   const paymentHistory: PaymentRecord[] = paymentRecords
@@ -70,8 +85,8 @@ export function RentProvider({ children }: { children: ReactNode }) {
     if (!residentId) {
       throw new Error('No resident is currently logged in — cannot record payment.');
     }
-      const label = paymentMethodLabels[method] ?? method;
-      const record = recordRentPayment(residentId, label, 'resident');
+    const label = paymentMethodLabels[method] ?? method;
+    const record = recordRentPayment(residentId, label, 'resident');
     return {
       id: record.id,
       month: record.month,

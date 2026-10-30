@@ -18,6 +18,20 @@ import { banks } from '../../constants/mockData';
 import { useRent } from '../../context/RentContext';
 import { usePaymentMethods } from '../../context/PaymentMethodsContext';
 
+// UPI ID format used here: a 10-digit mobile number, then "@", then the bank handle in letters
+// (for example 9999999999@ybl). Anything else typed is ignored as the person types.
+function sanitizeUpiInput(text: string): string {
+  const v = text.toLowerCase().replace(/[^0-9a-z@]/g, '');
+  const run = (v.match(/^\d*/) ?? [''])[0];
+  const digits = run.slice(0, 10);
+  if (digits.length < 10) return digits; // letters / @ are not allowed until 10 digits are typed
+  let rest = v.slice(run.length);
+  if (!rest) return digits;
+  if (rest[0] !== '@') rest = `@${rest}`; // letters typed straight after the number get the @ added
+  return digits + '@' + rest.slice(1).replace(/[^a-z]/g, '').slice(0, 20);
+}
+const isValidUpi = (v: string) => /^\d{10}@[a-z]{2,20}$/.test(v.trim());
+
 const paymentMethods = [
   { id: 'upi', label: 'UPI', icon: 'phone-portrait-outline' },
   { id: 'card', label: 'Credit / Debit Card', icon: 'card-outline' },
@@ -28,6 +42,11 @@ export default function PayRentScreen() {
   const navigation = useNavigation<any>();
   const { rentStatus, markRentAsPaid } = useRent();
   const { savedUpiIds, savedCards, addUpiId, addCard } = usePaymentMethods();
+  // rentStatus.amount is already the amount after any deduction the admin entered on the Rent screen.
+  const amountToPay = rentStatus.amount;
+  const gross = rentStatus.grossAmount;
+  const deduction = rentStatus.deduction;
+  const reason = rentStatus.deductionReason;
 
   const [selected, setSelected] = useState('upi');
   const [processing, setProcessing] = useState(false);
@@ -48,7 +67,7 @@ export default function PayRentScreen() {
 
   const canPay = (() => {
     if (selected === 'upi') {
-      return showNewUpiForm ? newUpiId.trim().length >= 5 : !!selectedUpiId;
+      return showNewUpiForm ? isValidUpi(newUpiId) : !!selectedUpiId;
     }
     if (selected === 'card') {
       if (showNewCardForm) {
@@ -105,8 +124,25 @@ export default function PayRentScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={[typography.body, { color: colors.textMuted }]}>Amount to pay</Text>
         <Text style={[typography.heading1, { color: colors.text, marginTop: 4 }]}>
-          ₹{rentStatus.amount}
+          ₹{amountToPay}
         </Text>
+        {deduction > 0 && (
+          <View style={styles.deductionBox}>
+            <View style={styles.deductionLine}>
+              <Text style={[typography.caption, { color: colors.textMuted }]}>Monthly rent</Text>
+              <Text style={[typography.caption, { color: colors.textMuted }]}>₹{gross}</Text>
+            </View>
+            <View style={styles.deductionLine}>
+              <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>Deduction</Text>
+              <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>−₹{deduction}</Text>
+            </View>
+            {!!reason && (
+              <Text style={[typography.caption, { color: colors.textMuted, fontStyle: 'italic', marginTop: 2 }]}>
+                {reason}
+              </Text>
+            )}
+          </View>
+        )}
 
         <Text
           style={[
@@ -187,14 +223,33 @@ export default function PayRentScreen() {
             </TouchableOpacity>
 
             {showNewUpiForm && (
-              <TextInput
-                style={styles.input}
-                placeholder="yourname@upi"
-                placeholderTextColor={colors.textMuted}
-                value={newUpiId}
-                onChangeText={setNewUpiId}
-                autoCapitalize="none"
-              />
+              <>
+                <TextInput
+                  style={[
+                    styles.input,
+                    newUpiId.length > 0 && !isValidUpi(newUpiId) && { borderColor: colors.error },
+                  ]}
+                  placeholder="9999999999@ybl"
+                  placeholderTextColor={colors.textMuted}
+                  value={newUpiId}
+                  onChangeText={(t) => setNewUpiId(sanitizeUpiInput(t))}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  maxLength={31}
+                />
+                <Text
+                  style={[
+                    typography.caption,
+                    { color: newUpiId.length > 0 && !isValidUpi(newUpiId) ? colors.error : colors.textMuted, marginBottom: spacing.sm },
+                  ]}
+                >
+                  {newUpiId.length > 0 && !isValidUpi(newUpiId)
+                    ? newUpiId.replace(/\D/g, '').length < 10 || !newUpiId.includes('@')
+                      ? `Enter your 10-digit mobile number first (${Math.min(10, (newUpiId.match(/^\d*/) ?? [''])[0].length)}/10), then @ and the bank name, e.g. 9999999999@ybl`
+                      : 'Add the bank name after @, e.g. @ybl, @ibl, @okaxis'
+                    : '10-digit mobile number, then @ and the bank name, e.g. 9999999999@ybl'}
+                </Text>
+              </>
             )}
           </View>
         )}
@@ -325,7 +380,7 @@ export default function PayRentScreen() {
             <ActivityIndicator color={colors.white} />
           ) : (
             <Text style={[typography.button, { color: colors.white }]}>
-              Pay ₹{rentStatus.amount}
+              Pay ₹{amountToPay}
             </Text>
           )}
         </TouchableOpacity>
@@ -418,6 +473,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     alignItems: 'center',
   },
+  deductionBox: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+  },
+  deductionLine: { flexDirection: 'row', justifyContent: 'space-between' },
   payButtonDisabled: {
     opacity: 0.5,
   },

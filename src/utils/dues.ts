@@ -10,6 +10,10 @@ export type Due = {
   capacity: number | null;
   /** Rent still to be collected: unpaid months, minus any agreed deduction. */
   outstanding: number;
+  /** Rent before any deduction, and the deduction the admin entered (with the note), for display. */
+  gross: number;
+  deduction: number;
+  deductionReason: string | null;
   months: number;
   oldestDue: Date;
   daysOverdue: number;
@@ -59,11 +63,16 @@ export function computeDues(residents: AdminResident[], rooms: any[], paymentRec
       const hasThisMonth = mine.some((p) => p.month === thisMonth);
 
       let outstanding = unpaid.reduce((sum, p) => sum + net(p), 0);
+      let gross = unpaid.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+      const deduction = unpaid.reduce((sum, p) => sum + (Number(p.deduction) || 0), 0);
+      const deductionReason: string | null =
+        unpaid.map((p) => p.deductionReason).filter((x) => !!x).join('; ') || null;
       let months = unpaid.length;
       const dueDates = unpaid.map((p) => parseDue(p.dueDate)).filter((d): d is Date => !!d);
 
       if (!hasThisMonth) {
         outstanding += r.monthlyRent;
+        gross += r.monthlyRent;
         months += 1;
         dueDates.push(new Date(now.getFullYear(), now.getMonth(), r.rentDueDay || 5));
       }
@@ -81,6 +90,9 @@ export function computeDues(residents: AdminResident[], rooms: any[], paymentRec
         floor: room ? room.floor : null,
         capacity: room ? room.capacity : null,
         outstanding,
+        gross,
+        deduction,
+        deductionReason,
         months: Math.max(1, months),
         oldestDue,
         daysOverdue,
