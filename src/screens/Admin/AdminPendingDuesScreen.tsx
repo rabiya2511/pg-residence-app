@@ -21,6 +21,7 @@ import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/W
 import { isPreBookedNow } from '../../context/AdminContext';
 import { openWhatsApp } from '../../utils/whatsapp';
 import { computeDues, Due } from '../../utils/dues';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 type View_ = 'rooms' | 'defaulters';
 type Bucket = 'All' | 'Over30' | 'From15To30' | 'Recent';
 
@@ -284,7 +285,8 @@ export default function AdminPendingDuesScreen() {
             <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>Room {d.roomNumber}</Text>
           </View>
         )}
-        <View style={{ flex: 1 }}>
+        <ResidentAvatar uri={d.resident.profileImageUri} name={d.resident.name} size={40} />
+        <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Text style={[typography.bodyBold, { color: colors.text }]}>
             {d.resident.name}
             {isPreBookedNow(d.resident) ? '  · Pre-booking' : ''}

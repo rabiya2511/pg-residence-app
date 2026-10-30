@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  SectionList,
   TouchableOpacity,
   Alert,
   Modal,
@@ -19,6 +20,8 @@ import { typography } from '../../constants/typography';
 import { AdminResident } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
+import { formatPhoneDisplay } from '../../utils/phone';
 
 const statusColors: Record<string, { bg: string; text: string }> = {
   Paid: { bg: '#D1FAE5', text: colors.success },
@@ -27,6 +30,9 @@ const statusColors: Record<string, { bg: string; text: string }> = {
 };
 
 const money = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+type ViewMode = 'list' | 'room';
+type StatusFilter = 'pending' | 'paid' | 'all';
+
 const currentMonthLabel = () => new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
 function RentRow({
@@ -34,6 +40,7 @@ function RentRow({
   roomNumber,
   deduction,
   deductionReason,
+  hideRoom,
   onMarkPaid,
   onDeduction,
 }: {
@@ -41,6 +48,7 @@ function RentRow({
   roomNumber: string | undefined;
   deduction: number;
   deductionReason?: string | null;
+  hideRoom?: boolean;
   onMarkPaid: () => void;
   onDeduction: () => void;
 }) {
@@ -48,9 +56,15 @@ function RentRow({
   const net = Math.max(0, resident.monthlyRent - deduction);
   return (
     <View style={styles.card}>
+      <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={40} />
       <View style={styles.left}>
         <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
-        <Text style={[typography.caption, { color: colors.textMuted }]}>Room {roomNumber ?? '—'}</Text>
+        {!!resident.phone && (
+          <Text style={[typography.caption, { color: colors.textMuted }]}>{formatPhoneDisplay(resident.phone)}</Text>
+        )}
+        {!hideRoom && (
+          <Text style={[typography.caption, { color: colors.textMuted }]}>Room {roomNumber ?? '—'}</Text>
+        )}
         <TouchableOpacity
           style={[styles.deductionBtn, deduction > 0 && styles.deductionBtnOn]}
           activeOpacity={0.8}
@@ -71,9 +85,12 @@ function RentRow({
           </Text>
         </TouchableOpacity>
         {!!deductionReason && deduction > 0 && (
-          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2, maxWidth: 140 }]} numberOfLines={1}>
-            {deductionReason}
-          </Text>
+          <View style={styles.noteRow}>
+            <Ionicons name="document-text-outline" size={13} color={colors.textMuted} />
+            <Text style={[typography.caption, styles.noteText]} numberOfLines={2}>
+              {deductionReason}
+            </Text>
+          </View>
         )}
       </View>
       <View style={styles.right}>
@@ -107,6 +124,9 @@ function RentRow({
 export default function AdminRentScreen() {
   const { residents, markRentPaid, setRentDeduction, rooms, paymentRecords, properties } = useAdmin();
   const [whatsappVisible, setWhatsappVisible] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
+  const [search, setSearch] = useState('');
 
   // Deduction dialog
   const [dedTarget, setDedTarget] = useState<AdminResident | null>(null);
@@ -151,6 +171,10 @@ export default function AdminRentScreen() {
         Alert.alert('Enter an Amount', 'Type the deduction amount, for example 500.');
         return;
       }
+      if (!dedReason.trim()) {
+        Alert.alert('Add a Note', 'Please write why this amount is being deducted.');
+        return;
+      }
       if (value > dedTarget.monthlyRent) {
         Alert.alert('Too Large', `The deduction cannot be more than the rent (${money(dedTarget.monthlyRent)}).`);
         return;
@@ -188,6 +212,71 @@ export default function AdminRentScreen() {
     };
   });
 
+  // What the list / room views show (status filter + search).
+  const visibleResidents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return residents
+      .filter((r) =>
+        statusFilter === 'all' ? true : statusFilter === 'paid' ? r.rentStatus === 'Paid' : r.rentStatus !== 'Paid'
+      )
+      .filter((r) => {
+        if (!q) return true;
+        const room = rooms.find((rm) => rm.id === r.roomId)?.roomNumber ?? '';
+        return (
+          r.name.toLowerCase().includes(q) ||
+          (r.phone ?? '').replace(/\s/g, '').includes(q.replace(/\s/g, '')) ||
+          room.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [residents, rooms, statusFilter, search]);
+
+  const roomSections = useMemo(() => {
+    const map = new Map<string, AdminResident[]>();
+    visibleResidents.forEach((r) => {
+      const list = map.get(r.roomId) ?? [];
+      list.push(r);
+      map.set(r.roomId, list);
+    });
+    return Array.from(map.entries())
+      .map(([roomId, data]) => ({ room: rooms.find((rm) => rm.id === roomId), roomId, data }))
+      .sort((a, b) => {
+        const fa = a.room?.floor ?? 999;
+        const fb = b.room?.floor ?? 999;
+        return fa - fb || (a.room?.roomNumber ?? '').localeCompare(b.room?.roomNumber ?? '', undefined, { numeric: true });
+      });
+  }, [visibleResidents, rooms]);
+
+  const filterCounts = {
+    pending: residents.filter((r) => r.rentStatus !== 'Paid').length,
+    paid: residents.filter((r) => r.rentStatus === 'Paid').length,
+    all: residents.length,
+  };
+
+  const renderRow = (item: AdminResident, hideRoom?: boolean) => (
+    <RentRow
+      resident={item}
+      roomNumber={rooms.find((r) => r.id === item.roomId)?.roomNumber}
+      deduction={deductionOf(item)}
+      deductionReason={(recordOf.get(item.id) as any)?.deductionReason}
+      hideRoom={hideRoom}
+      onMarkPaid={() => handleMarkPaid(item)}
+      onDeduction={() => openDeduction(item)}
+    />
+  );
+
+  const emptyText = (
+    <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
+      {residents.length === 0
+        ? 'No residents yet.'
+        : search.trim()
+        ? 'No residents match your search.'
+        : statusFilter === 'pending'
+        ? "No pending or overdue rent — everyone's paid up! 🎉"
+        : 'No residents found.'}
+    </Text>
+  );
+
   const previewNet = dedTarget ? Math.max(0, dedTarget.monthlyRent - (Number(dedAmount) || 0)) : 0;
 
   return (
@@ -215,27 +304,102 @@ export default function AdminRentScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={pendingResidents}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
-            No pending or overdue rent — everyone's paid up! 🎉
-          </Text>
-        }
-        renderItem={({ item }) => (
-          <RentRow
-            resident={item}
-            roomNumber={rooms.find((r) => r.id === item.roomId)?.roomNumber}
-            deduction={deductionOf(item)}
-            deductionReason={(recordOf.get(item.id) as any)?.deductionReason}
-            onMarkPaid={() => handleMarkPaid(item)}
-            onDeduction={() => openDeduction(item)}
-          />
-        )}
-      />
+      <View style={styles.modeRow}>
+        {([
+          { key: 'list', label: 'List', icon: 'list-outline' },
+          { key: 'room', label: 'Room-wise', icon: 'business-outline' },
+        ] as const).map((m) => (
+          <TouchableOpacity
+            key={m.key}
+            style={[styles.modeBtn, viewMode === m.key && styles.modeBtnActive]}
+            onPress={() => setViewMode(m.key)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name={m.icon as any} size={15} color={viewMode === m.key ? colors.white : colors.text} />
+            <Text style={[typography.caption, { color: viewMode === m.key ? colors.white : colors.text, fontWeight: '700', marginLeft: 4 }]}>
+              {m.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <View style={styles.searchRow}>
+        <Ionicons name="search" size={16} color={colors.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search by name, phone or room..."
+          placeholderTextColor={colors.textMuted}
+        />
+      </View>
+
+      <View style={styles.chipRow}>
+        {([
+          { key: 'pending', label: 'Pending' },
+          { key: 'paid', label: 'Paid' },
+          { key: 'all', label: 'All' },
+        ] as const).map((f) => (
+          <TouchableOpacity
+            key={f.key}
+            style={[styles.chip, statusFilter === f.key && styles.chipActive]}
+            onPress={() => setStatusFilter(f.key)}
+          >
+            <Text style={[typography.caption, { color: statusFilter === f.key ? colors.white : colors.text, fontWeight: '700' }]}>
+              {f.label} ({filterCounts[f.key]})
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {viewMode === 'list' ? (
+        <FlatList
+          data={visibleResidents}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={emptyText}
+          renderItem={({ item }) => renderRow(item)}
+        />
+      ) : (
+        <SectionList
+          sections={roomSections}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          stickySectionHeadersEnabled={false}
+          ListEmptyComponent={emptyText}
+          renderSectionHeader={({ section }) => {
+            const pendingInRoom = section.data.filter((r) => r.rentStatus !== 'Paid').length;
+            return (
+              <View style={styles.roomHeader}>
+                <View style={styles.roomIconWrap}>
+                  <Ionicons name="bed-outline" size={16} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[typography.bodyBold, { color: colors.text }]}>
+                    {section.room ? `Room ${section.room.roomNumber}` : 'No room'}
+                  </Text>
+                  <Text style={[typography.caption, { color: colors.textMuted }]}>
+                    {section.room ? `Floor ${section.room.floor} · ${section.room.capacity} Sharing · ` : ''}
+                    {section.data.length} resident{section.data.length !== 1 ? 's' : ''}
+                  </Text>
+                </View>
+                {pendingInRoom > 0 && (
+                  <View style={styles.roomPendingBadge}>
+                    <Text style={[typography.caption, { color: colors.warning, fontWeight: '700' }]}>
+                      {pendingInRoom} pending
+                    </Text>
+                  </View>
+                )}
+              </View>
+            );
+          }}
+          renderItem={({ item }) => renderRow(item, true)}
+        />
+      )}
 
       <WhatsAppNotifyModal
         visible={whatsappVisible}
@@ -274,13 +438,15 @@ export default function AdminRentScreen() {
                 autoFocus
               />
 
-              <Text style={styles.label}>Reason (optional)</Text>
+              <Text style={styles.label}>Deduction note (why are you deducting?)</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, styles.noteInput]}
                 value={dedReason}
                 onChangeText={setDedReason}
-                placeholder="e.g. Maintenance issue, early payment..."
+                placeholder="e.g. Maintenance issue, early payment, damaged item..."
                 placeholderTextColor={colors.textMuted}
+                multiline
+                maxLength={200}
               />
 
               {dedTarget && (
@@ -331,6 +497,58 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   listContent: { paddingHorizontal: spacing.md, paddingBottom: spacing.xl },
+  modeRow: { flexDirection: 'row', paddingHorizontal: spacing.md, marginBottom: spacing.sm, gap: spacing.xs },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modeBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  searchInput: { flex: 1, paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, color: colors.text, fontSize: 14 },
+  chipRow: { flexDirection: 'row', paddingHorizontal: spacing.md, marginBottom: spacing.sm, gap: spacing.xs },
+  chip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  roomHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+    paddingHorizontal: 2,
+  },
+  roomIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.full,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  roomPendingBadge: { backgroundColor: '#FEF3C7', paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full },
   card: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -342,7 +560,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  left: {},
+  left: { flex: 1, marginLeft: spacing.sm },
   right: { alignItems: 'flex-end' },
   badge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full, marginTop: 4 },
   deductionBtn: {
@@ -356,6 +574,9 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     marginTop: spacing.xs,
   },
+  noteRow: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 4, maxWidth: 170 },
+  noteText: { color: colors.textMuted, marginLeft: 4, flexShrink: 1, fontStyle: 'italic' },
+  noteInput: { minHeight: 70, textAlignVertical: 'top' },
   deductionBtnOn: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
 
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: spacing.lg },

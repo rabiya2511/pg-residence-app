@@ -20,6 +20,7 @@ import { AdminResident } from '../../constants/mockData';
 import SpeedDialContacts from '../../components/SpeedDialContacts';
 import { openWhatsApp } from '../../utils/whatsapp';
 import { formatPhoneDisplay } from '../../utils/phone';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 type TabKey = 'room' | 'dialpad' | 'speed';
 
@@ -48,13 +49,10 @@ function ResidentCallCard({
   roomLabel?: string;
   callingEnabled: boolean;
 }) {
-  const initial = resident.name.trim().charAt(0).toUpperCase() || '?';
   return (
     <View style={styles.residentCard}>
       <View style={styles.residentTopRow}>
-        <View style={styles.avatar}>
-          <Text style={[typography.bodyBold, { color: colors.white }]}>{initial}</Text>
-        </View>
+        <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={44} />
         <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
           <View style={styles.phoneRow}>

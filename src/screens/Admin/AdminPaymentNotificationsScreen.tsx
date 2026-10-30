@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -115,6 +115,7 @@ export default function AdminPaymentNotificationsScreen() {
     vacateNotifications,
     markVacateNotificationRead,
     markAllVacateNotificationsRead,
+    clearNotifications,
   } = useAdmin();
 
   const feed: FeedItem[] = [
@@ -127,6 +128,21 @@ export default function AdminPaymentNotificationsScreen() {
   const handleMarkAllRead = () => {
     markAllNotificationsRead();
     markAllVacateNotificationsRead();
+  };
+
+  const handleClearData = () => {
+    Alert.alert(
+      'Clear Notifications',
+      `Delete all ${feed.length} notification${feed.length !== 1 ? 's' : ''}? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear Data',
+          style: 'destructive',
+          onPress: () => clearNotifications(['payment', 'vacate']),
+        },
+      ]
+    );
   };
 
   const handlePress = (item: FeedItem) => {
@@ -146,14 +162,23 @@ export default function AdminPaymentNotificationsScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={[typography.heading3, { color: colors.text }]}>Notifications</Text>
-        {unreadCount > 0 ? (
-          <TouchableOpacity onPress={handleMarkAllRead}>
-            <Text style={[typography.caption, { color: colors.primary }]}>Mark all read</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 70 }} />
-        )}
+        <View style={styles.headerActions}>
+          {unreadCount > 0 && (
+            <TouchableOpacity onPress={handleMarkAllRead}>
+              <Text style={[typography.caption, { color: colors.primary }]}>Mark all read</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
+
+      {feed.length > 0 && (
+        <TouchableOpacity style={styles.clearButton} onPress={handleClearData} activeOpacity={0.85}>
+          <Ionicons name="trash-outline" size={14} color={colors.error} />
+          <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 4 }]}>
+            Clear Data
+          </Text>
+        </TouchableOpacity>
+      )}
 
       <FlatList
         data={feed}
@@ -162,7 +187,7 @@ export default function AdminPaymentNotificationsScreen() {
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
-            No notifications yet.
+            No notifications.
           </Text>
         }
         renderItem={({ item }) =>
@@ -187,6 +212,18 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   backButton: { padding: spacing.xs },
+  headerActions: { minWidth: 80, alignItems: 'flex-end' },
+  clearButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    marginRight: spacing.md,
+    marginBottom: spacing.sm,
+  },
   listContent: { paddingHorizontal: spacing.md, paddingBottom: spacing.xl },
   card: {
     flexDirection: 'row',

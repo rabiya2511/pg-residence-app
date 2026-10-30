@@ -1,5 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -83,7 +85,8 @@ type Selection =
 
 export default function AdminRevenueScreen() {
   const navigation = useNavigation();
-  const { residents, archivedResidents, paymentRecords, dailyGuests, rooms, clearRevenueData, restoreRevenueData } = useAdmin();
+  const { residents, archivedResidents, paymentRecords, dailyGuests, rooms, clearRevenueData, restoreRevenueData, activeProperty } = useAdmin();
+  const [exportingPdf, setExportingPdf] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const detailsY = useRef(0);
 
@@ -303,6 +306,126 @@ export default function AdminRevenueScreen() {
     return room ? `Room ${room.roomNumber}` : '';
   };
 
+  /* ------------------------- PDF report ------------------------- */
+  const esc = (v: any) =>
+    String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+  const buildReportHtml = () => {
+    const generated = new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    const pgName = activeProperty?.name ?? 'My PG';
+    const txnRows = selectedTxns
+      .map(
+        (t, i) => `<tr>
+          <td>${i + 1}</td>
+          <td>${esc(prettyDate(t.key))}</td>
+          <td>${esc(t.name)}</td>
+          <td>${esc(t.room)}</td>
+          <td>${esc(t.kind)}</td>
+          <td>${esc(t.method)}</td>
+          <td class="r">${esc(formatINR(t.amount))}</td>
+        </tr>`
+      )
+      .join('');
+    const methodRows = byMethod
+      .map(([m, v]) => `<tr><td>${esc(m)}</td><td class="r">${v.count}</td><td class="r">${esc(formatINR(v.amount))}</td></tr>`)
+      .join('');
+    const monthRows = months
+      .map((m) => `<tr><td>${esc(m.label)} ${m.year}</td><td class="r">${m.count}</td><td class="r">${esc(formatINR(m.amount))}</td></tr>`)
+      .join('');
+    const unpaidRows = unpaidRecords
+      .map(
+        (p, i) => `<tr><td>${i + 1}</td><td>${esc(nameOf(p.residentId))}</td><td>${esc(roomOf(p.residentId))}</td>
+          <td>${esc(p.status)}</td><td class="r">${esc(formatINR(p.amount))}</td></tr>`
+      )
+      .join('');
+
+    return `<!DOCTYPE html><html><head><meta charset="utf-8" />
+    <style>
+      body { font-family: Helvetica, Arial, sans-serif; color: #111827; padding: 24px; font-size: 12px; }
+      h1 { font-size: 22px; margin: 0 0 2px 0; }
+      h2 { font-size: 15px; margin: 22px 0 8px 0; border-bottom: 2px solid #e5e7eb; padding-bottom: 4px; }
+      .muted { color: #6b7280; }
+      .kpis { display: flex; gap: 10px; margin-top: 12px; }
+      .kpi { flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }
+      .kpi .v { font-size: 17px; font-weight: 700; margin-top: 4px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { text-align: left; background: #f3f4f6; padding: 7px 6px; font-size: 11px; }
+      td { padding: 6px; border-bottom: 1px solid #e5e7eb; }
+      .r { text-align: right; }
+      tr { page-break-inside: avoid; }
+    </style></head><body>
+      <h1>Monthly Revenue Report</h1>
+      <div class="muted">${esc(pgName)} &middot; ${esc(periodTitle)}</div>
+      <div class="muted">Generated on ${esc(generated)}</div>
+
+      <div class="kpis">
+        <div class="kpi"><div class="muted">Total received</div><div class="v">${esc(formatINR(selTotal))}</div></div>
+        <div class="kpi"><div class="muted">Rent</div><div class="v">${esc(formatINR(selRent))}</div></div>
+        <div class="kpi"><div class="muted">Day guests</div><div class="v">${esc(formatINR(selGuest))}</div></div>
+        <div class="kpi"><div class="muted">Payments</div><div class="v">${selectedTxns.length}</div></div>
+      </div>
+
+      <h2>Rent collection status &middot; ${esc(ymLabel(focusYm))}</h2>
+      <table>
+        <tr><th>Expected</th><th>Collected</th><th>Due</th><th>Collected %</th></tr>
+        <tr><td>${esc(formatINR(overallAmount))}</td><td>${esc(formatINR(collectedAmount))}</td><td>${esc(formatINR(dueAmount))}</td><td>${collectedPercent}%</td></tr>
+      </table>
+
+      <h2>Last 6 months</h2>
+      <table>
+        <tr><th>Month</th><th class="r">Payments</th><th class="r">Revenue</th></tr>
+        ${monthRows}
+        <tr><td><b>Total</b></td><td></td><td class="r"><b>${esc(formatINR(totalRevenue))}</b></td></tr>
+      </table>
+
+      <h2>By payment mode</h2>
+      ${
+        byMethod.length
+          ? `<table><tr><th>Mode</th><th class="r">Payments</th><th class="r">Amount</th></tr>${methodRows}</table>`
+          : '<div class="muted">No payments in this period.</div>'
+      }
+
+      <h2>Payments received</h2>
+      ${
+        selectedTxns.length
+          ? `<table><tr><th>#</th><th>Date</th><th>Name</th><th>Room</th><th>Type</th><th>Mode</th><th class="r">Amount</th></tr>${txnRows}
+             <tr><td colspan="6"><b>Total</b></td><td class="r"><b>${esc(formatINR(selTotal))}</b></td></tr></table>`
+          : '<div class="muted">No payments were received in this period.</div>'
+      }
+
+      ${
+        unpaidRecords.length
+          ? `<h2>Unpaid rent &middot; ${esc(ymLabel(focusYm))}</h2>
+             <table><tr><th>#</th><th>Resident</th><th>Room</th><th>Status</th><th class="r">Amount</th></tr>${unpaidRows}</table>`
+          : ''
+      }
+    </body></html>`;
+  };
+
+  const handleDownloadPdf = async () => {
+    try {
+      setExportingPdf(true);
+      const { uri } = await Print.printToFileAsync({ html: buildReportHtml(), base64: false });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `Revenue Report - ${periodTitle}`,
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        Alert.alert('PDF Generated', `Saved to: ${uri}`);
+      }
+    } catch (e: any) {
+      console.warn('revenue pdf failed:', e?.message ?? e);
+      Alert.alert('Export Failed', 'Could not generate the PDF. Please try again.');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   /* ------------------------- calendar ------------------------- */
   const marks = useMemo(() => {
     const map = new Map<string, { count: number; total: number }>();
@@ -337,13 +460,27 @@ export default function AdminRevenueScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={[typography.heading3, { color: colors.text }]}>Monthly Revenue</Text>
-        <TouchableOpacity
-          onPress={handleClearData}
-          style={styles.backButton}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="trash-outline" size={22} color={colors.error} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={handleDownloadPdf}
+            disabled={exportingPdf}
+            style={styles.backButton}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            {exportingPdf ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Ionicons name="document-text-outline" size={22} color={colors.primary} />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleClearData}
+            style={styles.backButton}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="trash-outline" size={22} color={colors.error} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>

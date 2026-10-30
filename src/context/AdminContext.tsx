@@ -188,6 +188,8 @@ type AdminContextType = {
   ) => AdminPaymentRecord;
   markNotificationRead: (notificationId: string) => void;
   markAllNotificationsRead: () => void;
+  /** Permanently deletes this property's notifications of the given kinds (all kinds when omitted). */
+  clearNotifications: (kinds?: ('payment' | 'vacate' | 'complaint')[]) => Promise<void>;
   markVacateNotificationRead: (notificationId: string) => void;
   markAllVacateNotificationsRead: () => void;
   markComplaintNotificationRead: (notificationId: string) => void;
@@ -200,6 +202,12 @@ type AdminContextType = {
   clearRevenueData: () => Promise<{ ok: boolean; count: number; message?: string }>;
   /** Brings back everything hidden by clearRevenueData. */
   restoreRevenueData: () => Promise<{ ok: boolean; count: number; message?: string }>;
+  /** Day Revenue screen: hides today's day-guest payments from that screen (guest records are kept). */
+  /** Permanently deletes a day-guest registration (and its payments). */
+  deleteDailyGuest: (id: string) => Promise<{ ok: boolean; message?: string }>;
+  clearDayRevenue: () => Promise<{ ok: boolean; count: number; message?: string }>;
+  /** Brings back everything hidden by clearDayRevenue. */
+  restoreDayRevenue: () => Promise<{ ok: boolean; count: number; message?: string }>;
   /**
    * Creates a new Open complaint directly on the admin-side Complaints
    * system, and fires a matching AdminComplaintNotification for the bell
@@ -294,6 +302,15 @@ type AdminContextType = {
    * move.
    */
   transferResidentRoom: (residentId: string, newPropertyId: string, newRoomId: string) => void;
+  /**
+   * Ads of ONE property only: the admin's active property, or the signed-in resident's own
+   * property. A resident never receives the ads of another property.
+   */
+  ads: AdminAd[];
+  /** Publishes an ad for the active property. Waits for the photo upload; the form stays filled if it fails. */
+  createAd: (input: { note: string; imageUri?: string | null; expiresOn: Date }) => Promise<{ ok: boolean; message?: string }>;
+  setAdActive: (adId: string, active: boolean) => void;
+  deleteAd: (adId: string) => void;
 };
 
 const AdminContext = createContext<AdminContextType | undefined>(undefined);
@@ -355,6 +372,24 @@ export function isPreBookedNow(r: { isPreBooking?: boolean; joiningDate: string 
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   return jd.getTime() > today;
+}
+
+// An advertisement the admin publishes for ONE property. Only residents of that property see it.
+export type AdminAd = {
+  id: string;
+  propertyId: string;
+  note: string;
+  imageUrl: string | null;
+  startAt: number;   // ms, when the admin published it
+  expiresAt: number; // ms, end of the chosen last day (23:59:59)
+  active: boolean;   // admin can pause an ad
+  createdAt: number;
+};
+
+// An ad is shown only while it is switched on and today is inside its date range.
+export function isAdLiveNow(ad: AdminAd): boolean {
+  const now = Date.now();
+  return ad.active && now >= ad.startAt && now <= ad.expiresAt;
 }
 
 // ───────────────────────── Firestore helpers ─────────────────────────
@@ -562,6 +597,26 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     'rooms', () => inConstraint('propertyId', roomPropertyIds), roomPropertyIds.join(',')
   ).data;
 
+  // ───────── Ads: strictly one property ─────────
+  // Admin: the property they are working in. Resident: the property they live in.
+  // A resident of another property never gets these documents, and the filter below
+  // double-checks it on the phone as well.
+  const adsQ = useCollection<any>(
+    'ads',
+    () =>
+      scopedIds
+        ? inConstraint('propertyId', scopedIds)
+        : ownPropertyId
+        ? where('propertyId', '==', ownPropertyId)
+        : null,
+    `${scopeKey}|${ownPropertyId ?? ''}`
+  );
+  const ads = useMemo(() => {
+    const myPropertyId = isAdminSession ? activeId : ownPropertyId;
+    if (!myPropertyId) return [] as AdminAd[];
+    return adsQ.data.filter((a: any) => a.propertyId === myPropertyId).sort(byNewest) as AdminAd[];
+  }, [adsQ.data, isAdminSession, activeId, ownPropertyId]);
+
   // ───────── Payments, complaints, notifications, guests, identity documents ─────────
   const scopeConstraint = () =>
     scopedIds
@@ -696,6 +751,15 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   };
 
   const markAllNotificationsRead = () => markAllRead('payment');
+
+  const clearNotifications = async (kinds?: ('payment' | 'vacate' | 'complaint')[]) => {
+    const targets = notifQ.data.filter((n) => !kinds || kinds.includes(n.kind));
+    for (let i = 0; i < targets.length; i += 400) {
+      const batch = writeBatch(db);
+      targets.slice(i, i + 400).forEach((n) => batch.delete(doc(db, 'notifications', n.id)));
+      await batch.commit().catch(warn('clear notifications:'));
+    }
+  };
   const markVacateNotificationRead = markNotificationRead;
   const markAllVacateNotificationsRead = () => markAllRead('vacate');
   const markComplaintNotificationRead = markNotificationRead;
@@ -933,6 +997,53 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     } catch (e: any) {
       console.warn('restoreRevenueData failed:', e?.code ?? e?.message);
       return { ok: false, count: 0, message: 'Could not restore the revenue data. Check your connection and try again.' };
+    }
+  };
+
+  const deleteDailyGuest = async (id: string) => {
+    try {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'dailyGuests', id));
+      await batch.commit();
+      return { ok: true };
+    } catch (e: any) {
+      console.warn('deleteDailyGuest failed:', e?.code ?? e?.message);
+      return { ok: false, message: 'Could not delete the registration. Check your connection and try again.' };
+    }
+  };
+
+  const clearDayRevenue = async () => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = start.getTime() + 24 * 60 * 60 * 1000;
+    const todays = guestsQ.data.filter(
+      (g) => !g.dayRevenueCleared && (g.checkInTimestamp ?? 0) >= start.getTime() && (g.checkInTimestamp ?? 0) < end
+    );
+    const ops: ((b: any) => void)[] = todays.map((g) => (b: any) =>
+      b.update(doc(db, 'dailyGuests', g.id), { dayRevenueCleared: true })
+    );
+    if (ops.length === 0) return { ok: true, count: 0 };
+    try {
+      await runInBatches(ops);
+      return { ok: true, count: ops.length };
+    } catch (e: any) {
+      console.warn('clearDayRevenue failed:', e?.code ?? e?.message);
+      return { ok: false, count: 0, message: 'Could not clear the day revenue. Check your connection and try again.' };
+    }
+  };
+
+  const restoreDayRevenue = async () => {
+    const hidden = guestsQ.data.filter((g) => g.dayRevenueCleared);
+    const ops: ((b: any) => void)[] = hidden.map((g) => (b: any) =>
+      b.update(doc(db, 'dailyGuests', g.id), { dayRevenueCleared: false })
+    );
+    if (ops.length === 0) return { ok: true, count: 0 };
+    try {
+      await runInBatches(ops);
+      return { ok: true, count: ops.length };
+    } catch (e: any) {
+      console.warn('restoreDayRevenue failed:', e?.code ?? e?.message);
+      return { ok: false, count: 0, message: 'Could not restore the day revenue. Check your connection and try again.' };
     }
   };
 
@@ -1405,6 +1516,58 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       .catch(warn('uploadDailyGuestImage:'));
   };
 
+  // ───────── Ads ─────────
+  // Every ad is stamped with the property the admin is working in, so it reaches only that
+  // property's residents.
+  const createAd = async (input: { note: string; imageUri?: string | null; expiresOn: Date }) => {
+    const note = input.note.trim();
+    if (!activeId) return { ok: false, message: 'No property selected.' };
+    if (!note && !input.imageUri) return { ok: false, message: 'Add a note or a photo for the ad.' };
+
+    const end = input.expiresOn;
+    const startAt = Date.now();
+    const expiresAt = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999).getTime();
+    if (expiresAt < startAt) return { ok: false, message: 'The end date has already passed.' };
+
+    const id = doc(collection(db, 'ads')).id;
+    try {
+      let imageUrl: string | null = null;
+      if (input.imageUri) {
+        imageUrl = /^https?:/.test(input.imageUri)
+          ? input.imageUri
+          : await uploadImage(input.imageUri, `ads/${id}/image-${Date.now()}.jpg`);
+      }
+      // If the phone is offline the write is queued and never answers, so don't wait forever.
+      await Promise.race([
+        setDoc(
+          doc(db, 'ads', id),
+          clean({ id, propertyId: activeId, note, imageUrl, startAt, expiresAt, active: true, createdAt: Date.now() })
+        ),
+        new Promise((resolve) => setTimeout(resolve, 10000)),
+      ]);
+      return { ok: true };
+    } catch (err: any) {
+      console.warn('createAd failed:', err?.code ?? err?.message);
+      return {
+        ok: false,
+        message:
+          err?.code === 'firestore/permission-denied'
+            ? 'You are not allowed to publish ads for this property.'
+            : 'Could not publish the ad. Check your connection and try again.',
+      };
+    }
+  };
+
+  const setAdActive = (adId: string, active: boolean) => {
+    updateDoc(doc(db, 'ads', adId), { active }).catch(warn('setAdActive:'));
+  };
+
+  const deleteAd = (adId: string) => {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'ads', adId));
+    batch.commit().catch(warn('deleteAd:'));
+  };
+
   // ───────── Properties and rooms ─────────
   const addProperty = (name: string, details: NewPropertyDetails = {}): Property => {
     const addressDetails = details.addressDetails ?? EMPTY_ADDRESS;
@@ -1792,6 +1955,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         recordRentPayment,
         markNotificationRead,
         markAllNotificationsRead,
+        clearNotifications,
         markVacateNotificationRead,
         markAllVacateNotificationsRead,
         markComplaintNotificationRead,
@@ -1801,6 +1965,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         clearComplaints,
         clearRevenueData,
         restoreRevenueData,
+        deleteDailyGuest,
+        clearDayRevenue,
+        restoreDayRevenue,
         addComplaint,
         addResident,
         registerResident,
@@ -1831,6 +1998,10 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         bookMonthlyResident,
         bookDayGuestSelf,
         transferResidentRoom,
+        ads,
+        createAd,
+        setAdActive,
+        deleteAd,
       }}
     >
       {children}

@@ -292,11 +292,16 @@ export default function AdminResidentFormScreen() {
 
   // ---- Payment & charges ----
   const [isPreBooking, setIsPreBooking] = useState(existing?.isPreBooking ?? false);
-  const [firstMonthPaid, setFirstMonthPaid] = useState(true);
+  // New residents must pick Paid / Not Paid explicitly (no silent default).
+  const [rentChoice, setRentChoice] = useState<'Paid' | 'Not Paid' | null>(null);
+  const firstMonthPaid = rentChoice === 'Paid';
   const [monthlyRent, setMonthlyRent] = useState(existing ? String(existing.monthlyRent) : '');
-  const [depositStatus, setDepositStatus] = useState<DepositStatus>(
-    existing?.advanceDepositStatus ?? (existing && existing.securityDeposit <= 0 ? 'No Advance' : 'Paid')
+  const [depositChoice, setDepositChoice] = useState<DepositStatus | null>(
+    existing ? existing.advanceDepositStatus ?? (existing.securityDeposit <= 0 ? 'No Advance' : 'Paid') : null
   );
+  // Calculations treat "not chosen yet" like no advance; saving requires a choice.
+  const depositStatus: DepositStatus = depositChoice ?? 'No Advance';
+  const setDepositStatus = (v: DepositStatus) => setDepositChoice(v);
   const [depositAmount, setDepositAmount] = useState(existing ? String(existing.securityDeposit) : '');
   const [maintenanceFee, setMaintenanceFee] = useState(
     existing?.maintenanceFee !== undefined ? String(existing.maintenanceFee) : ''
@@ -438,6 +443,15 @@ const handleSave = () => {
       return;
     }
 
+    if (!isEdit && rentChoice === null) {
+      Alert.alert('First Month Rent', 'Please select whether the first month rent is Paid or Not Paid.');
+      return;
+    }
+    if (depositChoice === null) {
+      Alert.alert('Advance Deposit', 'Please select whether the advance deposit is Paid, Not Paid or No Advance.');
+      return;
+    }
+
     let depositValue = 0;
     if (depositStatus !== 'No Advance') {
       depositValue = toNum(depositAmount);
@@ -460,13 +474,13 @@ const handleSave = () => {
 
     if (!isEdit && firstMonthPaid) {
       if (payNum <= 0) {
-        Alert.alert('Missing Payment Amount', 'Enter the first month payment amount, or switch off "First Month Rent Paid".');
+        Alert.alert('Missing Payment Amount', 'Enter the first month payment amount, or choose "Not Paid" for the first month rent.');
         return;
       }
       if (payNum < rentValue) {
         Alert.alert(
           'Payment Less Than Rent',
-          `The payment (${formatINR(payNum)}) is less than the monthly rent (${formatINR(rentValue)}). Enter the full rent, or switch off "First Month Rent Paid" to leave the rent as Pending.`
+          `The payment (${formatINR(payNum)}) is less than the monthly rent (${formatINR(rentValue)}). Enter the full rent, or choose "Not Paid" to leave the rent as Pending.`
         );
         return;
       }
@@ -823,30 +837,92 @@ const handleSave = () => {
                   value={isPreBooking}
                   onValueChange={setIsPreBooking}
                 />
-                <SwitchCard
-                  title="First Month Rent Paid"
-                  subtitle="Record check-in payment now"
-                  value={firstMonthPaid}
-                  onValueChange={setFirstMonthPaid}
-                />
               </>
             )}
 
             <Field label="Monthly Rent (₹)" value={monthlyRent} onChangeText={setMonthlyRent} placeholder="e.g. 12000" keyboardType="numeric" />
 
-            <Text style={[typography.caption, styles.label]}>Advance Deposit</Text>
+            {!isEdit && rentNum <= 0 && (
+              <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.md }]}>
+                Enter the monthly rent above to choose whether it is Paid or Not Paid.
+              </Text>
+            )}
+            {!isEdit && rentNum > 0 && (
+              <>
+                <Text style={[typography.caption, styles.label]}>Monthly Rent Status *</Text>
+                <View style={styles.radioRow}>
+                  {(['Paid', 'Not Paid'] as const).map((opt) => (
+                    <TouchableOpacity key={opt} style={styles.radioItem} activeOpacity={0.8} onPress={() => setRentChoice(opt)}>
+                      <Ionicons
+                        name={rentChoice === opt ? 'radio-button-on' : 'radio-button-off'}
+                        size={22}
+                        color={rentChoice === opt ? (opt === 'Paid' ? colors.success : colors.error) : colors.textMuted}
+                      />
+                      <Text style={[typography.caption, { color: colors.text, marginLeft: 6 }]}>{opt}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View
+                  style={[
+                    styles.statusNote,
+                    { backgroundColor: rentChoice === 'Paid' ? '#D1FAE5' : rentChoice === 'Not Paid' ? '#FEE2E2' : colors.background },
+                  ]}
+                >
+                  <Ionicons
+                    name={rentChoice === 'Paid' ? 'checkmark-circle' : rentChoice === 'Not Paid' ? 'alert-circle' : 'help-circle-outline'}
+                    size={16}
+                    color={rentChoice === 'Paid' ? colors.success : rentChoice === 'Not Paid' ? colors.error : colors.textMuted}
+                  />
+                  <Text
+                    style={[
+                      typography.caption,
+                      {
+                        color: rentChoice === 'Paid' ? colors.success : rentChoice === 'Not Paid' ? colors.error : colors.textMuted,
+                        marginLeft: 6,
+                        flex: 1,
+                        fontWeight: '700',
+                      },
+                    ]}
+                  >
+                    {rentChoice === 'Paid'
+                      ? `Paid · Rent due: ${formatINR(0)}`
+                      : rentChoice === 'Not Paid'
+                      ? `Not Paid · Rent due: ${formatINR(rentNum)}`
+                      : `Monthly rent ${formatINR(rentNum)} · select Paid or Not Paid`}
+                  </Text>
+                </View>
+              </>
+            )}
+
+            <Text style={[typography.caption, styles.label]}>Advance Deposit *</Text>
             <View style={styles.radioRow}>
               {(['Paid', 'Not Paid', 'No Advance'] as const).map((opt) => (
                 <TouchableOpacity key={opt} style={styles.radioItem} activeOpacity={0.8} onPress={() => setDepositStatus(opt)}>
                   <Ionicons
-                    name={depositStatus === opt ? 'radio-button-on' : 'radio-button-off'}
+                    name={depositChoice === opt ? 'radio-button-on' : 'radio-button-off'}
                     size={22}
-                    color={depositStatus === opt ? colors.warning : colors.textMuted}
+                    color={
+                      depositChoice === opt
+                        ? opt === 'Paid'
+                          ? colors.success
+                          : opt === 'Not Paid'
+                          ? colors.error
+                          : colors.warning
+                        : colors.textMuted
+                    }
                   />
                   <Text style={[typography.caption, { color: colors.text, marginLeft: 6 }]}>{opt}</Text>
                 </TouchableOpacity>
               ))}
             </View>
+            {depositChoice === 'Not Paid' && (
+              <View style={[styles.statusNote, { backgroundColor: '#FEE2E2' }]}>
+                <Ionicons name="alert-circle" size={16} color={colors.error} />
+                <Text style={[typography.caption, { color: colors.error, marginLeft: 6, flex: 1 }]}>
+                  Advance deposit will show as Not Paid (due).
+                </Text>
+              </View>
+            )}
 
             {depositStatus !== 'No Advance' && (
               <Field
@@ -1254,6 +1330,7 @@ const styles = StyleSheet.create({
   },
   radioRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },
   radioItem: { flexDirection: 'row', alignItems: 'center' },
+  statusNote: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md },
   twoCol: { flexDirection: 'row', gap: spacing.sm },
   colField: { flex: 1 },
   summaryRow: { flexDirection: 'row', gap: spacing.xs },

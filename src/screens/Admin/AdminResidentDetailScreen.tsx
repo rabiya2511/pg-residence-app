@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Modal, Image, useWindowDimensions, ActivityIndicator } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -106,6 +108,12 @@ export default function AdminResidentDetailScreen() {
   // Opens / closes the rent payment trend under the "View Documents & Payments" button.
   const [showTrend, setShowTrend] = useState(false);
 
+  // Profile photo viewer (1:1) with download.
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const { width: screenWidth } = useWindowDimensions();
+  const photoSize = Math.min(screenWidth - spacing.md * 2, 560);
+
   const resident = residents.find((r) => r.id === residentId);
   const residentComplaints = complaints.filter((c) => c.residentName === resident?.name);
 
@@ -119,6 +127,36 @@ export default function AdminResidentDetailScreen() {
   const fullRoomHistory = (resident.roomHistory ?? []).slice().reverse();
   const residentPayments = paymentRecords.filter((p) => p.residentId === resident.id);
   const emergencyContacts = getEmergencyContacts(resident);
+
+  const downloadProfilePhoto = async () => {
+    const uri = resident.profileImageUri;
+    if (!uri) return;
+    try {
+      setPhotoBusy(true);
+      const safe = `${resident.name}_profile`.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+      let local = uri;
+      if (/^data:/.test(uri)) {
+        local = `${FileSystem.cacheDirectory}${safe}.jpg`;
+        await FileSystem.writeAsStringAsync(local, uri.split(',')[1] ?? '', { encoding: FileSystem.EncodingType.Base64 });
+      } else if (/^https?:/.test(uri)) {
+        const res = await FileSystem.downloadAsync(uri, `${FileSystem.cacheDirectory}${safe}.jpg`);
+        if (res.status && res.status >= 400) throw new Error(`HTTP ${res.status}`);
+        local = res.uri;
+      }
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(local, { mimeType: 'image/jpeg', dialogTitle: `${resident.name} - profile photo` });
+      } else {
+        Alert.alert('Downloaded', `Saved to: ${local}`);
+      }
+    } catch (e: any) {
+      console.warn('profile photo download failed:', e?.message ?? e);
+      Alert.alert('Download Failed', 'The photo could not be downloaded. Please try again.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const residentNote = String((resident as any).notes ?? '').trim();
 
   const handleMarkPaid = () => {
     Alert.alert('Mark Rent as Paid', `Confirm ₹${resident.monthlyRent} received from ${resident.name}?`, [
@@ -143,7 +181,15 @@ export default function AdminResidentDetailScreen() {
       </View>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.profileCard}>
-          <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={80} />
+          <TouchableOpacity
+            activeOpacity={resident.profileImageUri ? 0.8 : 1}
+            onPress={() => resident.profileImageUri && setPhotoOpen(true)}
+          >
+            <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={80} />
+          </TouchableOpacity>
+          {!!resident.profileImageUri && (
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>Tap photo to view</Text>
+          )}
           <Text style={[typography.heading2, { color: colors.text, marginTop: spacing.sm }]}>
             {resident.name}
           </Text>
@@ -194,7 +240,45 @@ export default function AdminResidentDetailScreen() {
             <Text style={[typography.body, { color: colors.textMuted }]}>Joined</Text>
             <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.joiningDate}</Text>
           </View>
+          {(resident.securityDeposit ?? 0) > 0 && (
+            <View style={[styles.infoRow, styles.infoRowBorder]}>
+              <Text style={[typography.body, { color: colors.textMuted }]}>Advance Deposit</Text>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[typography.bodyBold, { color: colors.text }]}>₹{resident.securityDeposit}</Text>
+                <View
+                  style={[
+                    styles.badge,
+                    {
+                      backgroundColor: (resident as any).advanceDepositStatus === 'Not Paid' ? '#FEE2E2' : '#D1FAE5',
+                      marginTop: 2,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      typography.caption,
+                      { color: (resident as any).advanceDepositStatus === 'Not Paid' ? colors.error : colors.success },
+                    ]}
+                  >
+                    {(resident as any).advanceDepositStatus === 'Not Paid' ? 'Not Paid' : 'Paid'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
         </View>
+
+        {!!residentNote && (
+          <>
+            <Text style={[typography.heading3, { color: colors.text, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+              Notes
+            </Text>
+            <View style={styles.noteCard}>
+              <Ionicons name="create-outline" size={18} color={colors.primary} style={{ marginRight: spacing.sm, marginTop: 2 }} />
+              <Text style={[typography.body, { color: colors.text, flex: 1 }]}>{residentNote}</Text>
+            </View>
+          </>
+        )}
 
         {/* Emergency contacts: tap a row to call, or the WhatsApp icon to message */}
         <Text style={[typography.heading3, { color: colors.text, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
@@ -364,6 +448,36 @@ export default function AdminResidentDetailScreen() {
           })
         )}
       </ScrollView>
+
+      {/* Profile photo in 1:1, with download */}
+      <Modal visible={photoOpen} transparent animationType="fade" onRequestClose={() => setPhotoOpen(false)}>
+        <View style={styles.photoOverlay}>
+          <View style={styles.photoBar}>
+            <Text style={[typography.bodyBold, { color: colors.white, flex: 1 }]} numberOfLines={1}>
+              {resident.name}
+            </Text>
+            <TouchableOpacity onPress={downloadProfilePhoto} disabled={photoBusy} style={styles.photoBtn}>
+              {photoBusy ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Ionicons name="download-outline" size={22} color={colors.white} />
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setPhotoOpen(false)} style={styles.photoBtn}>
+              <Ionicons name="close" size={24} color={colors.white} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.photoCenter}>
+            {!!resident.profileImageUri && (
+              <Image
+                source={{ uri: resident.profileImageUri }}
+                style={{ width: photoSize, height: photoSize, borderRadius: radius.md, backgroundColor: '#111' }}
+                resizeMode="cover"
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -530,6 +644,19 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 
+  noteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  photoOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
+  photoBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingTop: spacing.xl, paddingBottom: spacing.sm },
+  photoBtn: { padding: spacing.sm, marginLeft: spacing.xs },
+  photoCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   complaintCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,

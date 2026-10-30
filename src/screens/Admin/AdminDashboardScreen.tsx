@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -11,7 +11,8 @@ import { useMockAuth } from '../../context/MockAuthContext';
 import { PG_UPI_ID, PG_PAYEE_NAME } from '../../constants/mockData';
 import { REPORTS } from './AdminReportsScreen';
 import { computeDues } from '../../utils/dues';
-import { useAdmin, isDailyGuestActiveNow, isPreBookedNow } from '../../context/AdminContext';
+import { useAdmin, isDailyGuestActiveNow, isPreBookedNow, isAdLiveNow } from '../../context/AdminContext';
+import { todayDayRevenue } from '../../utils/dayRevenue';
 
 // Name of the Room & Bed Management screen in your navigator.
 const ROOMS_ROUTE = 'AdminRooms';
@@ -69,6 +70,7 @@ export default function AdminDashboardScreen() {
     vacateNotifications,
     properties,
     rooms,
+    ads, 
     activeProperty,
     setActiveProperty,
   } = useAdmin();
@@ -125,6 +127,7 @@ export default function AdminDashboardScreen() {
   const totalFloors = activeProperty?.floors ?? new Set(rooms.map((r) => r.floor)).size;
 
   const preBookedCount = adminResidents.filter((r) => isPreBookedNow(r)).length;
+  const liveAdsCount = ads.filter(isAdLiveNow).length;
 
   const todayStr = new Date().toDateString();
   const rentToday = paymentRecords
@@ -183,6 +186,12 @@ export default function AdminDashboardScreen() {
     setActiveProperty(id);
     closeSwitch();
   };
+  const confirmLogout = () => {
+    Alert.alert('Log Out', 'Are you sure you want to log out of the admin dashboard?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log Out', style: 'destructive', onPress: () => logout() },
+    ]);
+  };
   const openManageProperties = () => {
     closeSwitch();
     // Wait for the sheet to finish closing. On Android, navigating while a Modal is still
@@ -199,7 +208,7 @@ export default function AdminDashboardScreen() {
     { label: 'Documents', value: pendingDocuments, icon: 'document-text-outline', color: colors.primary, onPress: () => navigation.navigate('AdminIdentityDocuments') },
     { label: 'Properties', value: properties.length, icon: 'business-outline', color: colors.warning, onPress: () => navigation.navigate('AdminProperties') },
     { label: 'Vacating', value: vacatingCount, icon: 'exit-outline', color: colors.error, onPress: () => navigation.navigate('AdminVacating') },
-    { label: 'Day Revenue', value: `₹${totalDayGuestRevenue.toLocaleString()}`, icon: 'calendar-outline', color: colors.success, onPress: () => navigation.navigate('AdminDayRevenue') },
+    { label: 'Day Revenue', value: `₹${todayDayRevenue(dailyGuests).toLocaleString()}`, icon: 'calendar-outline', color: colors.success, onPress: () => navigation.navigate('AdminDayRevenue') },
     { label: 'Analytics', value: `${occupancyPercent}%`, icon: 'analytics-outline', color: colors.primary, onPress: () => navigation.navigate('AdminAnalytics') },
     { label: 'Room Allocation', value: `${occupiedBeds}/${totalBeds}`, icon: 'bed-outline', color: colors.primary, onPress: () => navigation.navigate(ROOMS_ROUTE) },
     { label: 'Reports', value: REPORTS.length, icon: 'bar-chart-outline', color: colors.primary, onPress: () => navigation.navigate('AdminReports') },
@@ -212,6 +221,7 @@ export default function AdminDashboardScreen() {
     { label: 'Pre-booking', value: preBookedCount, icon: 'bookmark-outline', color: colors.warning, onPress: () => navigation.navigate('AdminPreBookingList', { propertyId: activeProperty?.id }) },
     { label: 'Send Notice', value: '', icon: 'megaphone-outline', color: colors.primary, onPress: () => navigation.navigate('AdminNotices') },
     { label: 'Call', value: '', icon: 'call-outline', color: colors.success, onPress: () => navigation.navigate('AdminDialer') },
+    { label: 'ADS', value: liveAdsCount, icon: 'gift-outline', color: colors.warning, onPress: () => navigation.navigate('AdminAds') },
     ...stats,
   ];
   const visibleActions = showAllActions ? quickActions : quickActions.slice(0, 9);
@@ -254,7 +264,7 @@ export default function AdminDashboardScreen() {
               </View>
             )}
           </TouchableOpacity>
-          <TouchableOpacity onPress={logout}>
+          <TouchableOpacity onPress={confirmLogout}>
             <Ionicons name="log-out-outline" size={24} color={colors.error} />
           </TouchableOpacity>
         </View>

@@ -101,6 +101,7 @@ function StayCard({
   onCollect,
   onExtend,
   onCheckout,
+  onDelete,
 }: {
   guest: AdminDailyGuest;
   roomLabel: string;
@@ -108,6 +109,7 @@ function StayCard({
   onCollect: () => void;
   onExtend: () => void;
   onCheckout: () => void;
+  onDelete: () => void;
 }) {
   const state = stayState(guest);
   const st = STATE_STYLE[state];
@@ -156,6 +158,9 @@ function StayCard({
         <TouchableOpacity style={styles.iconBtn} onPress={() => whatsappGuest(guest.phone)}>
           <Ionicons name="logo-whatsapp" size={17} color="#25D366" />
         </TouchableOpacity>
+        <TouchableOpacity style={styles.iconBtn} onPress={onDelete}>
+          <Ionicons name="trash-outline" size={17} color={colors.error} />
+        </TouchableOpacity>
         <View style={{ flex: 1 }} />
         {state !== 'checkedOut' && due.total > 0 && (
           <TouchableOpacity style={[styles.smallBtn, { backgroundColor: colors.success }]} onPress={onCollect}>
@@ -182,7 +187,24 @@ function StayCard({
 export default function AdminDailyGuestsScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { dailyGuests, rooms, properties, recordDailyGuestPayment, updateDailyGuest } = useAdmin();
+  const { dailyGuests, rooms, properties, recordDailyGuestPayment, updateDailyGuest, deleteDailyGuest } = useAdmin();
+
+  const confirmDelete = (g: AdminDailyGuest) =>
+    Alert.alert(
+      'Delete Registration',
+      `Delete ${g.name}'s registration? Their payments will also be removed from Day Revenue. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await deleteDailyGuest(g.id);
+            if (!res.ok) Alert.alert('Could Not Delete', res.message ?? 'Please try again.');
+          },
+        },
+      ]
+    );
 
   const [tab, setTab] = useState<Tab>(route.params?.tab === 'new' ? 'new' : 'dashboard');
   const [filter, setFilter] = useState<StayFilter>('all');
@@ -522,6 +544,7 @@ export default function AdminDailyGuestsScreen() {
                 onCollect={() => openCollect(item)}
                 onExtend={() => openExtend(item)}
                 onCheckout={() => checkOutGuest(item)}
+                onDelete={() => confirmDelete(item)}
               />
             )}
           />
@@ -582,6 +605,9 @@ export default function AdminDailyGuestsScreen() {
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={[typography.bodyBold, { color: colors.text }]}>{money(item.totalAmount)}</Text>
                     <Text style={[typography.caption, { color: colors.success }]}>Paid {money(item.advanceAmount ?? 0)}</Text>
+                    <TouchableOpacity onPress={() => confirmDelete(item)} hitSlop={8} style={{ marginTop: 6 }}>
+                      <Ionicons name="trash-outline" size={18} color={colors.error} />
+                    </TouchableOpacity>
                   </View>
                 </View>
 
@@ -762,7 +788,7 @@ const styles = StyleSheet.create({
   avatarImage: { width: 44, height: 44 },
   pillRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   pill: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
   iconBtn: { width: 34, height: 34, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
   smallBtn: { paddingHorizontal: spacing.md, height: 34, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   outlineBtn: { borderWidth: 1, borderColor: colors.primary, backgroundColor: colors.surface },

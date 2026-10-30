@@ -1,28 +1,45 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import {
-  getFirestore, collection, doc, onSnapshot, query, where, setDoc,
+  getFirestore, collection, doc, onSnapshot, query, where, setDoc, deleteDoc,
 } from '@react-native-firebase/firestore';
 import { Announcement } from '../constants/mockData';
 import { useMockAuth } from './MockAuthContext';
 import { useAdmin } from './AdminContext';
 
+// A notice can optionally expire (epoch ms). Expired notices are hidden and the admin session removes them.
+export type NoticeWithExpiry = Announcement & { expiresAt?: number };
+
 type AnnouncementsContextType = {
-  announcements: Announcement[];
-  addAnnouncement: (announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'>) => void;
+  announcements: NoticeWithExpiry[];
+  addAnnouncement: (
+    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'>,
+    options?: { autoClearAfterDays?: number }
+  ) => void;
+  deleteAnnouncement: (id: string) => void;
+  clearAllAnnouncements: () => Promise<void>;
   pendingResidentNotice: Announcement | null;
   clearPendingResidentNotice: () => void;
 };
 
 const AnnouncementsContext = createContext<AnnouncementsContextType | undefined>(undefined);
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export function AnnouncementsProvider({ children }: { children: ReactNode }) {
   const { adminPropertyIds, residentId } = useMockAuth();
   const { residents } = useAdmin(); // resident session: contains just their own record
   const db = getFirestore();
 
-  const [list, setList] = useState<Announcement[]>([]);
+  const [list, setList] = useState<NoticeWithExpiry[]>([]);
+  const [now, setNow] = useState(Date.now());
   const [pendingResidentNotice, setPendingResidentNotice] = useState<Announcement | null>(null);
   const serverLoadedRef = useRef(false);
+
+  // Re-check expiry every minute so an expired notice disappears while the app is open.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // Admin: their properties. Resident: the property their record belongs to.
   const ownPropertyId = residents.find((r) => r.id === residentId)?.propertyId ?? null;
@@ -45,7 +62,19 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
       (snap: any) => {
         const rows = snap.docs.map((d: any) => ({ ...d.data(), id: d.id }));
         rows.sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-        setList(rows as Announcement[]);
+        setList(rows as NoticeWithExpiry[]);
+
+        // Admin session: permanently delete notices whose time is up.
+        if (isAdmin && !snap.metadata.fromCache) {
+          const t = Date.now();
+          rows
+            .filter((r: any) => r.expiresAt && r.expiresAt <= t)
+            .forEach((r: any) =>
+              deleteDoc(doc(db, 'announcements', r.id)).catch((e: any) =>
+                console.warn('expire announcement:', e?.code)
+              )
+            );
+        }
 
         // A resident with the app open gets the "New Notice" popup when a notice arrives live.
         if (!isAdmin && serverLoadedRef.current && !snap.metadata.fromCache) {
@@ -61,7 +90,16 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
     );
   }, [key, isAdmin]);
 
-  const addAnnouncement = (announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'>) => {
+  // Hide expired notices from everyone.
+  const activeList = useMemo(
+    () => list.filter((n) => !n.expiresAt || n.expiresAt > now),
+    [list, now]
+  );
+
+  const addAnnouncement = (
+    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'>,
+    options?: { autoClearAfterDays?: number }
+  ) => {
     const propertyId = adminPropertyIds?.[0];
     if (!propertyId) return; // only an admin session can send a notice
 
@@ -72,17 +110,37 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
       date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       propertyId,
     };
-    setDoc(doc(db, 'announcements', id), { ...newAnnouncement, createdAt: Date.now() }).catch((e: any) =>
+    const createdAt = Date.now();
+    const payload: any = { ...newAnnouncement, createdAt };
+    if (options?.autoClearAfterDays) payload.expiresAt = createdAt + options.autoClearAfterDays * DAY_MS;
+
+    setDoc(doc(db, 'announcements', id), payload).catch((e: any) =>
       console.warn('addAnnouncement:', e?.code)
     );
     setPendingResidentNotice(newAnnouncement); // drives the admin-side delivery popup
   };
 
+  const deleteAnnouncement = (id: string) => {
+    if (!isAdmin) return;
+    deleteDoc(doc(db, 'announcements', id)).catch((e: any) => console.warn('deleteAnnouncement:', e?.code));
+  };
+
+  const clearAllAnnouncements = async () => {
+    if (!isAdmin) return;
+    await Promise.all(
+      list.map((n) =>
+        deleteDoc(doc(db, 'announcements', n.id)).catch((e: any) => console.warn('clearAll:', e?.code))
+      )
+    );
+  };
+
   return (
     <AnnouncementsContext.Provider
       value={{
-        announcements: list,
+        announcements: activeList,
         addAnnouncement,
+        deleteAnnouncement,
+        clearAllAnnouncements,
         pendingResidentNotice,
         clearPendingResidentNotice: () => setPendingResidentNotice(null),
       }}

@@ -189,6 +189,14 @@ function ResidentCard({
             <Text style={[typography.caption, { color: rent.text, fontWeight: '700' }]}>Rent {resident.rentStatus}</Text>
           </View>
         )}
+        {!!String((resident as any).notes ?? '').trim() && (
+          <View style={styles.noteRow}>
+            <Ionicons name="document-text-outline" size={13} color={colors.textMuted} />
+            <Text style={[typography.caption, styles.noteText]} numberOfLines={2}>
+              {String((resident as any).notes).trim()}
+            </Text>
+          </View>
+        )}
       </View>
       <TouchableOpacity style={styles.roundIcon} onPress={() => handleCall(resident.phone)}>
         <Ionicons name="call" size={18} color={colors.primary} />
@@ -1258,6 +1266,8 @@ const styles = StyleSheet.create({
   roomTagText: { color: '#B45309', fontSize: 12, fontWeight: '800' },
   rentPill: { alignSelf: 'flex-start', paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full, marginTop: 4 },
   roundIcon: { padding: 6, marginLeft: 2 },
+  noteRow: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 6 },
+  noteText: { color: colors.textMuted, marginLeft: 4, flexShrink: 1, fontStyle: 'italic' },
 
   archivedCard: {
     backgroundColor: colors.surface,

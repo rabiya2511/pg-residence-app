@@ -29,6 +29,7 @@ import AdminReportDetailScreen from '../screens/Admin/AdminReportsDetailsScreen'
 import AdminCommunicationsScreen from '../screens/Admin/AdminCommunicationsScreen';
 import AdminPendingDuesScreen from '../screens/Admin/AdminPendingDuesScreen';
 import AdminAnalyticsScreen from '../screens/Admin/AdminAnalyticsScreen';
+import AdminAdsScreen from '../screens/Admin/AdminAdsScreen';
 
 const Stack = createNativeStackNavigator();
 export default function AdminStackNavigator() {
@@ -63,6 +64,7 @@ export default function AdminStackNavigator() {
       <Stack.Screen name="AdminCommunications" component={AdminCommunicationsScreen} />
       <Stack.Screen name="AdminPendingDues" component={AdminPendingDuesScreen} />
       <Stack.Screen name="AdminAnalytics" component={AdminAnalyticsScreen} />
+      <Stack.Screen name="AdminAds" component={AdminAdsScreen} />
     </Stack.Navigator>
   );
 }

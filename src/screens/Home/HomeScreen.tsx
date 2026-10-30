@@ -17,6 +17,7 @@ import QuickActionCard from '../../components/home/QuickActionCard';
 import RentStatusCard from '../../components/home/RentStatusCard';
 import AnnouncementCard from '../../components/home/AnnouncementCard';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
+import { ResidentAdPopup } from '../../components/common/AdPopupModal';
 
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
@@ -162,6 +163,9 @@ export default function HomeScreen() {
         title="New Notice"
         recipients={newNoticeRecipients}
       />
+
+      {/* Admin's advertisement pop-up: opens by itself once per login when a live ad exists */}
+      <ResidentAdPopup />
     </SafeAreaView>
   );
 }
