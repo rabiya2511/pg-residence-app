@@ -15,6 +15,12 @@ type RentStatusType = {
   dueInDays: number;
   status: 'Pending' | 'Paid' | 'Overdue';
   isPaid: boolean;
+  /** Everything still unpaid across all months (current + earlier). */
+  totalOutstanding: number;
+  /** Number of unpaid months. */
+  unpaidMonths: number;
+  /** Most recent paid record, or null. */
+  lastPayment: PaymentRecord | null;
 };
 
 type RentContextType = {
@@ -45,8 +51,11 @@ export function RentProvider({ children }: { children: ReactNode }) {
     (p) => p.residentId === residentId && p.month === currentMonthLabel
   );
 
+  // Due date this month. A due day like 31 is clamped to the month's last day
+  // (otherwise February 31 would roll over into March).
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const dueDateObj = resident
-    ? new Date(now.getFullYear(), now.getMonth(), resident.rentDueDay)
+    ? new Date(now.getFullYear(), now.getMonth(), Math.min(resident.rentDueDay || 5, daysInMonth))
     : now;
   const dueInDays = Math.ceil((dueDateObj.getTime() - now.getTime()) / msPerDay);
 
@@ -56,18 +65,6 @@ export function RentProvider({ children }: { children: ReactNode }) {
   const deduction = Math.min(recordAmount, Number((currentRecord as any)?.deduction) || 0);
   const isPaid = currentRecord?.status === 'Paid';
   const amountToPay = isPaid ? recordAmount : Math.max(0, recordAmount - deduction);
-
-  const rentStatus: RentStatusType = {
-    amount: amountToPay,
-    grossAmount: isPaid ? recordAmount + deduction : recordAmount,
-    deduction,
-    deductionReason: deduction > 0 ? (currentRecord as any)?.deductionReason ?? null : null,
-    monthLabel: `${now.toLocaleDateString('en-US', { month: 'long' })} Rent`,
-    dueDate: dueDateObj,
-    dueInDays,
-    status: isPaid ? 'Paid' : dueInDays < 0 ? 'Overdue' : 'Pending',
-    isPaid,
-  };
 
   const paymentHistory: PaymentRecord[] = paymentRecords
     .filter((p) => p.residentId === residentId && p.status === 'Paid')
@@ -80,6 +77,33 @@ export function RentProvider({ children }: { children: ReactNode }) {
       method: p.method,
       transactionId: p.transactionId,
     }));
+
+  const lastPayment =
+    [...paymentHistory].sort(
+      (a, b) => (Date.parse(b.paidOn) || 0) - (Date.parse(a.paidOn) || 0)
+    )[0] ?? null;
+
+  // Total outstanding = every unpaid month for this resident (after admin deductions).
+  const unpaid = paymentRecords.filter((p) => p.residentId === residentId && p.status !== 'Paid');
+  const totalOutstanding = unpaid.reduce((sum, p) => {
+    const d = Math.min(p.amount, Number((p as any).deduction) || 0);
+    return sum + Math.max(0, p.amount - d);
+  }, 0);
+
+  const rentStatus: RentStatusType = {
+    amount: amountToPay,
+    grossAmount: isPaid ? recordAmount + deduction : recordAmount,
+    deduction,
+    deductionReason: deduction > 0 ? (currentRecord as any)?.deductionReason ?? null : null,
+    monthLabel: `${now.toLocaleDateString('en-US', { month: 'long' })} Rent`,
+    dueDate: dueDateObj,
+    dueInDays,
+    status: isPaid ? 'Paid' : dueInDays < 0 ? 'Overdue' : 'Pending',
+    isPaid,
+    totalOutstanding,
+    unpaidMonths: unpaid.length,
+    lastPayment,
+  };
 
   const markRentAsPaid = (method: string): PaymentRecord => {
     if (!residentId) {
