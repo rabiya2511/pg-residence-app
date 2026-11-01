@@ -48,6 +48,7 @@ export const quickActions: QuickAction[] = [
   { id: 'visitors', label: 'Visitors', icon: 'people-outline' },
   { id: 'nearby', label: 'Nearby', icon: 'location-outline' },
   { id: 'vacate', label: 'Vacate Notice', icon: 'exit-outline' },
+  { id: 'laundry', label: 'Laundry', icon: 'shirt-outline' },
 ];
 
 export type Announcement = {
@@ -511,6 +512,7 @@ export type AdminResident = {
   officeIdUri?: string | null;
   bedNumber?: number;
   notes?: string;
+  permanentAddress?: string | null;
 };
 
 export const adminResidents: AdminResident[] = [
