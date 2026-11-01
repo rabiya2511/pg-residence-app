@@ -6,6 +6,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAnnouncements, NoticeWithExpiry } from '../../context/AnnouncementsContext';
+import { NOTICE_CATEGORIES, categoryOf } from '../../constants/noticeCategories';
 
 function expiryLabel(expiresAt?: number) {
   if (!expiresAt) return null;
@@ -48,6 +49,7 @@ export default function AdminNoticesScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [autoClear, setAutoClear] = useState(false);
+  const [categoryId, setCategoryId] = useState(NOTICE_CATEGORIES[0].id);
 
   const handleSend = () => {
     if (!title.trim() || !description.trim()) {
@@ -58,13 +60,15 @@ export default function AdminNoticesScreen() {
       {
         title: title.trim(),
         description: description.trim(),
-        icon: 'megaphone-outline',
+        icon: categoryOf({ category: categoryId }).icon,
+        category: categoryId,
       },
       autoClear ? { autoClearAfterDays: 7 } : undefined
     );
     setTitle('');
     setDescription('');
     setAutoClear(false);
+    setCategoryId(NOTICE_CATEGORIES[0].id);
     Alert.alert(
       'Sent',
       autoClear
@@ -105,6 +109,24 @@ export default function AdminNoticesScreen() {
       </View>
 
       <View style={styles.composeCard}>
+        <View style={styles.catRow}>
+          {NOTICE_CATEGORIES.map((c) => {
+            const on = c.id === categoryId;
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={[styles.catChip, on && styles.catChipOn]}
+                activeOpacity={0.8}
+                onPress={() => setCategoryId(c.id)}
+              >
+                <Ionicons name={c.icon as any} size={13} color={on ? colors.white : colors.textMuted} />
+                <Text style={[typography.caption, { color: on ? colors.white : colors.text, marginLeft: 4 }]}>
+                  {c.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
         <TextInput
           style={styles.titleInput}
           placeholder="Title"
@@ -231,6 +253,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  catRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: spacing.sm },
+  catChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  catChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   iconWrap: {
     width: 36,
     height: 36,

@@ -12,7 +12,7 @@ export type NoticeWithExpiry = Announcement & { expiresAt?: number };
 type AnnouncementsContextType = {
   announcements: NoticeWithExpiry[];
   addAnnouncement: (
-    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'>,
+    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'> & { category?: string },
     options?: { autoClearAfterDays?: number }
   ) => void;
   deleteAnnouncement: (id: string) => void;
@@ -97,7 +97,7 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
   );
 
   const addAnnouncement = (
-    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'>,
+    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'> & { category?: string },
     options?: { autoClearAfterDays?: number }
   ) => {
     const propertyId = adminPropertyIds?.[0];
