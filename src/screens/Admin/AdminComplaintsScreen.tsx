@@ -56,13 +56,18 @@ function ComplaintCard({
   resident,
   onChangeStatus,
   onOpen,
+  onComment,
 }: {
   complaint: AdminComplaint;
   resident?: AdminResident;
   onChangeStatus: () => void;
   onOpen: () => void;
+  onComment: (text: string) => void;
 }) {
   const statusStyle = statusColors[complaint.status];
+  const c: any = complaint;
+  const [replying, setReplying] = useState(false);
+  const [reply, setReply] = useState<string>(c.adminComment ?? '');
   const isNew = complaint.status === 'Open' && !(complaint as any).viewed;
   return (
     <TouchableOpacity activeOpacity={0.9} style={styles.card} onPress={onOpen}>
@@ -109,7 +114,65 @@ function ComplaintCard({
           )}
           <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
             {complaint.date}
+            {c.reopenedOn ? `  ·  Reopened ${c.reopenedOn}` : ''}
           </Text>
+
+          {/* Resident's satisfaction rating after the complaint was resolved */}
+          {typeof c.rating === 'number' && (
+            <View style={styles.ratingBox}>
+              <Text style={[typography.caption, { color: colors.warning, fontWeight: '700' }]}>
+                {'★'.repeat(c.rating)}
+                {'☆'.repeat(5 - c.rating)}
+              </Text>
+              {!!c.feedback && (
+                <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                  "{c.feedback}"
+                </Text>
+              )}
+            </View>
+          )}
+
+          {/* Reply shown to the resident on their complaint */}
+          {replying ? (
+            <View style={styles.replyBox}>
+              <TextInput
+                style={styles.replyInput}
+                value={reply}
+                onChangeText={setReply}
+                placeholder="Write a reply for the resident"
+                placeholderTextColor={colors.textMuted}
+                multiline
+                maxLength={300}
+              />
+              <View style={styles.replyActions}>
+                <TouchableOpacity onPress={() => { setReply(c.adminComment ?? ''); setReplying(false); }}>
+                  <Text style={[typography.caption, { color: colors.textMuted, fontWeight: '700' }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.replySave}
+                  onPress={() => {
+                    onComment(reply);
+                    setReplying(false);
+                  }}
+                >
+                  <Text style={[typography.caption, { color: colors.white, fontWeight: '700' }]}>Send Reply</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={{ marginTop: spacing.xs }}>
+              {!!c.adminComment && (
+                <Text style={[typography.caption, { color: colors.text }]}>
+                  Your reply{c.adminCommentOn ? ` (${c.adminCommentOn})` : ''}: {c.adminComment}
+                </Text>
+              )}
+              <TouchableOpacity onPress={() => setReplying(true)} hitSlop={6}>
+                <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginTop: 2 }]}>
+                  {c.adminComment ? 'Edit reply' : 'Reply to resident'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </View>
     </TouchableOpacity>
@@ -119,7 +182,7 @@ function ComplaintCard({
 export default function AdminComplaintsScreen() {
   const route = useRoute<any>();
   const routeFilter: string | undefined = route.params?.filterStatus;
-  const { complaints, residents, rooms, properties, activeProperty, updateComplaintStatus, markComplaintViewed, addComplaint, clearComplaints } = useAdmin();
+  const { complaints, residents, rooms, properties, activeProperty, updateComplaintStatus, markComplaintViewed, addComplaint, clearComplaints, setComplaintComment } = useAdmin();
 
   const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [whatsappRecipients, setWhatsappRecipients] = useState<WhatsAppRecipient[]>([]);
@@ -396,6 +459,7 @@ export default function AdminComplaintsScreen() {
             complaint={item}
             resident={findResident(item)}
             onChangeStatus={() => handleChangeStatus(item)}
+            onComment={(text) => setComplaintComment(item.id, text)}
             onOpen={() => {
               if (!(item as any).viewed) markComplaintViewed(item.id);
             }}
@@ -534,6 +598,37 @@ export default function AdminComplaintsScreen() {
 }
 
 const styles = StyleSheet.create({
+  ratingBox: {
+    marginTop: spacing.xs,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    padding: spacing.xs,
+  },
+  replyBox: { marginTop: spacing.xs },
+  replyInput: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    minHeight: 60,
+    fontSize: 13,
+    color: colors.text,
+    textAlignVertical: 'top',
+  },
+  replyActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
+  replySave: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    marginLeft: spacing.md,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.background,

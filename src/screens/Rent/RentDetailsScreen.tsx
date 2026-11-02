@@ -1,95 +1,120 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  ScrollView,
-} from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { banks } from '../../constants/mockData';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { useRent } from '../../context/RentContext';
-import { usePaymentMethods } from '../../context/PaymentMethodsContext';
+import { useResident } from '../../context/ResidentContext';
 
-const paymentMethods = [
-  { id: 'upi', label: 'UPI', icon: 'phone-portrait-outline' },
-  { id: 'card', label: 'Credit / Debit Card', icon: 'card-outline' },
-  { id: 'netbanking', label: 'Net Banking', icon: 'business-outline' },
-];
+const inr = (n: number) => `₹${(n || 0).toLocaleString('en-IN')}`;
 
-export default function PayRentScreen() {
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+// "October 2026" -> { m: 9, y: 2026 }
+const parseMonth = (label: string) => {
+  const [name, year] = (label || '').split(' ');
+  return { m: MONTH_FULL.findIndex((x) => x === name), y: Number(year) || 0 };
+};
+
+const receiptNo = (txn?: string, id?: string) =>
+  `RC-${((txn || id || '').replace(/[^0-9A-Za-z]/g, '').slice(-8) || '00000000').toUpperCase()}`;
+
+const esc = (v: any) =>
+  String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
+
+// Rent Details = where the resident SEES their rent: this month's status, dues and history.
+// Paying happens on the separate Pay Rent screen (opened with the Pay Now button).
+export default function RentDetailsScreen() {
   const navigation = useNavigation<any>();
-  const { rentStatus, markRentAsPaid } = useRent();
-  const { savedUpiIds, savedCards, addUpiId, addCard } = usePaymentMethods();
+  const { rentStatus, paymentHistory } = useRent();
+  const { residentData } = useResident();
 
-  const [selected, setSelected] = useState('upi');
-  const [processing, setProcessing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [year, setYear] = useState<number | null>(null);
+  const [month, setMonth] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  const [selectedUpiId, setSelectedUpiId] = useState<string | null>(null);
-  const [showNewUpiForm, setShowNewUpiForm] = useState(savedUpiIds.length === 0);
-  const [newUpiId, setNewUpiId] = useState('');
+  const { status, isPaid, amount, grossAmount, deduction, deductionReason } = rentStatus;
+  const statusColor = status === 'Paid' ? colors.success : status === 'Overdue' ? colors.error : colors.primary;
 
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [showNewCardForm, setShowNewCardForm] = useState(savedCards.length === 0);
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardHolderName, setCardHolderName] = useState('');
-  const [expiryMonth, setExpiryMonth] = useState('');
-  const [expiryYear, setExpiryYear] = useState('');
-  const [cvv, setCvv] = useState('');
+  const dueText = isPaid
+    ? 'Paid for this month'
+    : rentStatus.dueInDays < 0
+    ? `Overdue by ${Math.abs(rentStatus.dueInDays)} day${Math.abs(rentStatus.dueInDays) === 1 ? '' : 's'}`
+    : rentStatus.dueInDays === 0
+    ? 'Due today'
+    : `Due in ${rentStatus.dueInDays} day${rentStatus.dueInDays === 1 ? '' : 's'}`;
 
-  const [selectedBank, setSelectedBank] = useState<string | null>(null);
+  const dueDateText = rentStatus.dueDate.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 
-  const canPay = (() => {
-    if (selected === 'upi') {
-      return showNewUpiForm ? newUpiId.trim().length >= 5 : !!selectedUpiId;
-    }
-    if (selected === 'card') {
-      if (showNewCardForm) {
-        return (
-          cardNumber.replace(/\s/g, '').length >= 12 &&
-          cardHolderName.trim().length > 0 &&
-          expiryMonth.length === 2 &&
-          expiryYear.length === 2 &&
-          cvv.length >= 3
-        );
+  const sorted = useMemo(
+    () => [...paymentHistory].sort((a, b) => (Date.parse(b.paidOn) || 0) - (Date.parse(a.paidOn) || 0)),
+    [paymentHistory]
+  );
+
+  const years = useMemo(
+    () => Array.from(new Set(sorted.map((p) => parseMonth(p.month).y).filter(Boolean))).sort((a, b) => b - a),
+    [sorted]
+  );
+
+  const history = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return sorted.filter((p) => {
+      const pm = parseMonth(p.month);
+      if (year !== null && pm.y !== year) return false;
+      if (month !== null && pm.m !== month) return false;
+      if (!q) return true;
+      return [p.month, p.paidOn, p.method, p.transactionId, String(p.amount)]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q));
+    });
+  }, [sorted, query, year, month]);
+
+  const filtering = query.trim() !== '' || year !== null || month !== null;
+
+  const downloadReceipt = async (p: (typeof sorted)[number]) => {
+    try {
+      setBusyId(p.id);
+      const html = `
+        <html><body style="font-family: Arial, sans-serif; padding: 28px; color: #111;">
+          <h2 style="margin:0">Rent Receipt</h2>
+          <p style="margin:4px 0 18px; color:#555;">${esc(residentData.pgName || 'PG')}</p>
+          <table style="width:100%; border-collapse:collapse; font-size:14px;">
+            <tr><td style="padding:8px 0; color:#555;">Receipt No.</td><td style="text-align:right;"><b>${esc(receiptNo(p.transactionId, p.id))}</b></td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Resident</td><td style="text-align:right;">${esc(residentData.name)}</td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Room</td><td style="text-align:right;">${esc(residentData.room || '—')}</td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Rent for</td><td style="text-align:right;">${esc(p.month)}</td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Paid on</td><td style="text-align:right;">${esc(p.paidOn || '—')}</td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Payment method</td><td style="text-align:right;">${esc(p.method || '—')}</td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Transaction ID</td><td style="text-align:right;">${esc(p.transactionId || '—')}</td></tr>
+            <tr><td style="padding:8px 0; color:#555;">Status</td><td style="text-align:right;">Paid</td></tr>
+            <tr style="border-top:2px solid #111;"><td style="padding:12px 0; font-size:16px;"><b>Amount paid</b></td><td style="text-align:right; font-size:16px;"><b>${esc(inr(p.amount))}</b></td></tr>
+          </table>
+          <p style="margin-top:28px; color:#777; font-size:12px;">This is a computer-generated receipt.</p>
+        </body></html>`;
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Rent receipt' });
+      } else {
+        Alert.alert('Receipt Saved', 'The receipt was created, but sharing is not available on this device.');
       }
-      return !!selectedCardId;
+    } catch (e: any) {
+      console.warn('receipt failed:', e?.message ?? e);
+      Alert.alert('Receipt Failed', 'Could not create the receipt. Please try again.');
+    } finally {
+      setBusyId(null);
     }
-    if (selected === 'netbanking') {
-      return !!selectedBank;
-    }
-    return false;
-  })();
-
-  const handlePay = () => {
-    if (!canPay) return;
-    setProcessing(true);
-
-    if (selected === 'upi' && showNewUpiForm) {
-      addUpiId(newUpiId.trim());
-    }
-    if (selected === 'card' && showNewCardForm) {
-      addCard(cardNumber.trim(), cardHolderName.trim(), expiryMonth, expiryYear);
-    }
-
-    setTimeout(() => {
-      setProcessing(false);
-      const record = markRentAsPaid(selected);
-      navigation.replace('PaymentSuccess', {
-        amount: record.amount,
-        month: record.month,
-        paidOn: record.paidOn,
-        method: record.method,
-        transactionId: record.transactionId,
-      });
-    }, 1500);
   };
 
   return (
@@ -98,247 +123,240 @@ export default function PayRentScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[typography.heading3, { color: colors.text }]}>Pay Rent</Text>
-        <View style={{ width: 22 }} />
+        <Text style={[typography.heading3, { color: colors.text }]}>Rent Details</Text>
+        <View style={{ width: 30 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={[typography.body, { color: colors.textMuted }]}>Amount to pay</Text>
-        <Text style={[typography.heading1, { color: colors.text, marginTop: 4 }]}>
-          ₹{rentStatus.amount}
-        </Text>
-
-        <Text
-          style={[
-            typography.heading3,
-            { color: colors.text, marginTop: spacing.xl, marginBottom: spacing.sm },
-          ]}
-        >
-          Select Payment Method
-        </Text>
-
-        {paymentMethods.map((method) => {
-          const isSelected = selected === method.id;
-          return (
-            <TouchableOpacity
-              key={method.id}
-              style={[styles.methodCard, isSelected && styles.methodCardSelected]}
-              onPress={() => setSelected(method.id)}
-              activeOpacity={0.8}
-            >
-              <Ionicons
-                name={method.icon as any}
-                size={20}
-                color={isSelected ? colors.primary : colors.textMuted}
-              />
-              <Text
-                style={[
-                  typography.body,
-                  { marginLeft: spacing.sm, color: isSelected ? colors.primary : colors.text, flex: 1 },
-                ]}
-              >
-                {method.label}
-              </Text>
-              <Ionicons
-                name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                size={20}
-                color={isSelected ? colors.primary : colors.textMuted}
-              />
-            </TouchableOpacity>
-          );
-        })}
-
-        {selected === 'upi' && (
-          <View style={styles.subForm}>
-            {savedUpiIds.map((upi) => (
-              <TouchableOpacity
-                key={upi.id}
-                style={[
-                  styles.savedItem,
-                  selectedUpiId === upi.id && !showNewUpiForm && styles.savedItemSelected,
-                ]}
-                onPress={() => {
-                  setSelectedUpiId(upi.id);
-                  setShowNewUpiForm(false);
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="phone-portrait-outline" size={18} color={colors.primary} />
-                <Text style={[typography.body, { marginLeft: spacing.sm, color: colors.text, flex: 1 }]}>
-                  {upi.upiId}
-                </Text>
-                <Ionicons
-                  name={selectedUpiId === upi.id && !showNewUpiForm ? 'radio-button-on' : 'radio-button-off'}
-                  size={18}
-                  color={colors.primary}
-                />
-              </TouchableOpacity>
-            ))}
-
-            <TouchableOpacity
-              style={styles.addNewRow}
-              onPress={() => setShowNewUpiForm(!showNewUpiForm)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
-              <Text style={[typography.body, { marginLeft: spacing.sm, color: colors.primary }]}>
-                Add another UPI ID
-              </Text>
-            </TouchableOpacity>
-
-            {showNewUpiForm && (
-              <TextInput
-                style={styles.input}
-                placeholder="yourname@upi"
-                placeholderTextColor={colors.textMuted}
-                value={newUpiId}
-                onChangeText={setNewUpiId}
-                autoCapitalize="none"
-              />
-            )}
+        {/* This month */}
+        <View style={styles.card}>
+          <View style={styles.rowBetween}>
+            <Text style={[typography.bodyBold, { color: colors.text }]}>{rentStatus.monthLabel}</Text>
+            <View style={[styles.badge, { backgroundColor: `${statusColor}20` }]}>
+              <Text style={[typography.caption, { color: statusColor, fontWeight: '700' }]}>{status}</Text>
+            </View>
           </View>
+
+          <Text style={[typography.heading1, { color: colors.text, marginTop: spacing.sm }]}>{inr(amount)}</Text>
+          <Text style={[typography.caption, { color: status === 'Overdue' ? colors.error : colors.textMuted, marginTop: 2 }]}>
+            {dueText} · Due date {dueDateText}
+          </Text>
+
+          {deduction > 0 && (
+            <View style={styles.deductionBox}>
+              <View style={styles.rowBetween}>
+                <Text style={[typography.caption, { color: colors.textMuted }]}>Monthly rent</Text>
+                <Text style={[typography.caption, { color: colors.textMuted }]}>{inr(grossAmount)}</Text>
+              </View>
+              <View style={styles.rowBetween}>
+                <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>Deduction</Text>
+                <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>−{inr(deduction)}</Text>
+              </View>
+              {!!deductionReason && (
+                <Text style={[typography.caption, { color: colors.textMuted, fontStyle: 'italic', marginTop: 2 }]}>
+                  {deductionReason}
+                </Text>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* Outstanding */}
+        <View style={styles.card}>
+          <View style={styles.rowBetween}>
+            <Text style={[typography.body, { color: colors.textMuted }]}>Total outstanding</Text>
+            <Text
+              style={[
+                typography.bodyBold,
+                { color: rentStatus.totalOutstanding > 0 ? colors.error : colors.success },
+              ]}
+            >
+              {inr(rentStatus.totalOutstanding)}
+            </Text>
+          </View>
+          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
+            {rentStatus.unpaidMonths > 0
+              ? `${rentStatus.unpaidMonths} unpaid month${rentStatus.unpaidMonths === 1 ? '' : 's'}`
+              : 'No pending dues'}
+          </Text>
+          {rentStatus.lastPayment && (
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
+              Last payment: {inr(rentStatus.lastPayment.amount)} on {rentStatus.lastPayment.paidOn || '—'}
+            </Text>
+          )}
+        </View>
+
+        {/* History */}
+        <Text style={[typography.heading3, { color: colors.text, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+          Payment History
+        </Text>
+
+        {sorted.length > 0 && (
+          <>
+            <View style={styles.searchBox}>
+              <Ionicons name="search" size={18} color={colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search month, method, transaction ID"
+                placeholderTextColor={colors.textMuted}
+              />
+              {query.length > 0 && (
+                <TouchableOpacity onPress={() => setQuery('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+              <TouchableOpacity
+                style={[styles.chip, year === null && styles.chipOn]}
+                onPress={() => setYear(null)}
+              >
+                <Text style={[styles.chipText, year === null && { color: colors.white }]}>All years</Text>
+              </TouchableOpacity>
+              {years.map((y) => (
+                <TouchableOpacity
+                  key={y}
+                  style={[styles.chip, year === y && styles.chipOn]}
+                  onPress={() => setYear(y)}
+                >
+                  <Text style={[styles.chipText, year === y && { color: colors.white }]}>{y}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+              <TouchableOpacity
+                style={[styles.chip, month === null && styles.chipOn]}
+                onPress={() => setMonth(null)}
+              >
+                <Text style={[styles.chipText, month === null && { color: colors.white }]}>All months</Text>
+              </TouchableOpacity>
+              {MONTHS.map((m, idx) => (
+                <TouchableOpacity
+                  key={m}
+                  style={[styles.chip, month === idx && styles.chipOn]}
+                  onPress={() => setMonth(idx)}
+                >
+                  <Text style={[styles.chipText, month === idx && { color: colors.white }]}>{m}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </>
         )}
 
-        {selected === 'card' && (
-          <View style={styles.subForm}>
-            {savedCards.map((card) => (
+        {sorted.length === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons name="receipt-outline" size={26} color={colors.textMuted} />
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: 6 }]}>No payments yet.</Text>
+          </View>
+        ) : history.length === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons name="search-outline" size={26} color={colors.textMuted} />
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: 6 }]}>
+              No payments match your search.
+            </Text>
+          </View>
+        ) : (
+          history.map((p) => {
+            const open = openId === p.id;
+            return (
               <TouchableOpacity
-                key={card.id}
-                style={[
-                  styles.savedItem,
-                  selectedCardId === card.id && !showNewCardForm && styles.savedItemSelected,
-                ]}
-                onPress={() => {
-                  setSelectedCardId(card.id);
-                  setShowNewCardForm(false);
-                }}
-                activeOpacity={0.8}
+                key={p.id}
+                style={styles.historyRow}
+                activeOpacity={0.85}
+                onPress={() => setOpenId(open ? null : p.id)}
               >
-                <Ionicons name="card-outline" size={18} color={colors.primary} />
-                <Text style={[typography.body, { marginLeft: spacing.sm, color: colors.text, flex: 1 }]}>
-                  {card.cardType} •••• {card.cardNumberLast4}
-                </Text>
-                <Ionicons
-                  name={selectedCardId === card.id && !showNewCardForm ? 'radio-button-on' : 'radio-button-off'}
-                  size={18}
-                  color={colors.primary}
-                />
-              </TouchableOpacity>
-            ))}
-
-            <TouchableOpacity
-              style={styles.addNewRow}
-              onPress={() => setShowNewCardForm(!showNewCardForm)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
-              <Text style={[typography.body, { marginLeft: spacing.sm, color: colors.primary }]}>
-                Add another card
-              </Text>
-            </TouchableOpacity>
-
-            {showNewCardForm && (
-              <View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Card Number"
-                  placeholderTextColor={colors.textMuted}
-                  value={cardNumber}
-                  onChangeText={setCardNumber}
-                  keyboardType="number-pad"
-                  maxLength={19}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Cardholder Name"
-                  placeholderTextColor={colors.textMuted}
-                  value={cardHolderName}
-                  onChangeText={setCardHolderName}
-                />
-                <View style={styles.row}>
-                  <TextInput
-                    style={[styles.input, styles.inputThird]}
-                    placeholder="MM"
-                    placeholderTextColor={colors.textMuted}
-                    value={expiryMonth}
-                    onChangeText={setExpiryMonth}
-                    keyboardType="number-pad"
-                    maxLength={2}
-                  />
-                  <TextInput
-                    style={[styles.input, styles.inputThird]}
-                    placeholder="YY"
-                    placeholderTextColor={colors.textMuted}
-                    value={expiryYear}
-                    onChangeText={setExpiryYear}
-                    keyboardType="number-pad"
-                    maxLength={2}
-                  />
-                  <TextInput
-                    style={[styles.input, styles.inputThird]}
-                    placeholder="CVV"
-                    placeholderTextColor={colors.textMuted}
-                    value={cvv}
-                    onChangeText={setCvv}
-                    keyboardType="number-pad"
-                    maxLength={3}
-                    secureTextEntry
+                <View style={styles.historyTop}>
+                  <View style={styles.historyIcon}>
+                    <Ionicons name="checkmark" size={18} color={colors.success} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                    <Text style={[typography.bodyBold, { color: colors.text }]}>{p.month}</Text>
+                    <Text style={[typography.caption, { color: colors.textMuted }]} numberOfLines={1}>
+                      {p.paidOn || '—'}
+                      {p.method ? ` · ${p.method}` : ''}
+                    </Text>
+                  </View>
+                  <Text style={[typography.bodyBold, { color: colors.text }]}>{inr(p.amount)}</Text>
+                  <Ionicons
+                    name={open ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={colors.textMuted}
+                    style={{ marginLeft: 6 }}
                   />
                 </View>
-              </View>
-            )}
-          </View>
-        )}
 
-        {selected === 'netbanking' && (
-          <View style={styles.subForm}>
-            {banks.map((bank) => (
-              <TouchableOpacity
-                key={bank}
-                style={[styles.savedItem, selectedBank === bank && styles.savedItemSelected]}
-                onPress={() => setSelectedBank(bank)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="business-outline" size={18} color={colors.primary} />
-                <Text style={[typography.body, { marginLeft: spacing.sm, color: colors.text, flex: 1 }]}>
-                  {bank}
-                </Text>
-                <Ionicons
-                  name={selectedBank === bank ? 'radio-button-on' : 'radio-button-off'}
-                  size={18}
-                  color={colors.primary}
-                />
+                {open && (
+                  <View style={styles.details}>
+                    <View style={styles.rowBetween}>
+                      <Text style={[typography.caption, { color: colors.textMuted }]}>Receipt No.</Text>
+                      <Text style={[typography.caption, { color: colors.text, fontWeight: '700' }]}>
+                        {receiptNo(p.transactionId, p.id)}
+                      </Text>
+                    </View>
+                    <View style={styles.rowBetween}>
+                      <Text style={[typography.caption, { color: colors.textMuted }]}>Transaction ID</Text>
+                      <Text style={[typography.caption, { color: colors.text }]} selectable>
+                        {p.transactionId || '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.rowBetween}>
+                      <Text style={[typography.caption, { color: colors.textMuted }]}>Method</Text>
+                      <Text style={[typography.caption, { color: colors.text }]}>{p.method || '—'}</Text>
+                    </View>
+                    <View style={styles.rowBetween}>
+                      <Text style={[typography.caption, { color: colors.textMuted }]}>Status</Text>
+                      <Text style={[typography.caption, { color: colors.success, fontWeight: '700' }]}>Paid</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.receiptBtn}
+                      activeOpacity={0.85}
+                      disabled={busyId === p.id}
+                      onPress={() => downloadReceipt(p)}
+                    >
+                      {busyId === p.id ? (
+                        <ActivityIndicator color={colors.white} />
+                      ) : (
+                        <>
+                          <Ionicons name="download-outline" size={16} color={colors.white} />
+                          <Text style={styles.receiptText}>Download Receipt (PDF)</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
               </TouchableOpacity>
-            ))}
-          </View>
+            );
+          })
+        )}
+        {filtering && history.length > 0 && (
+          <Text style={[typography.caption, { color: colors.textMuted, textAlign: 'center', marginTop: 4 }]}>
+            Showing {history.length} of {sorted.length} payments
+          </Text>
         )}
       </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.payButton, (!canPay || processing) && styles.payButtonDisabled]}
-          activeOpacity={0.85}
-          onPress={handlePay}
-          disabled={!canPay || processing}
-        >
-          {processing ? (
-            <ActivityIndicator color={colors.white} />
-          ) : (
-            <Text style={[typography.button, { color: colors.white }]}>
-              Pay ₹{rentStatus.amount}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
+      {/* Pay Now only while this month's rent is unpaid */}
+      {!isPaid && amount > 0 && (
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={styles.payButton}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('PayRent')}
+          >
+            <Text style={[typography.button, { color: colors.white }]}>Pay Now · {inr(amount)}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -346,79 +364,87 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  backButton: {
-    padding: spacing.xs,
-  },
-  content: {
-    padding: spacing.md,
-    paddingBottom: spacing.xl,
-  },
-  methodCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  backButton: { padding: spacing.xs },
+  content: { padding: spacing.md, paddingBottom: spacing.xl },
+  card: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-  },
-  methodCardSelected: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryLight,
-  },
-  subForm: {
-    marginTop: spacing.xs,
+    padding: spacing.md,
     marginBottom: spacing.md,
-    paddingLeft: spacing.sm,
   },
-  savedItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  savedItemSelected: {
-    borderColor: colors.primary,
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  badge: { borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 4 },
+  deductionBox: {
+    marginTop: spacing.sm,
     backgroundColor: colors.primaryLight,
+    borderRadius: radius.md,
+    padding: spacing.sm,
   },
-  addNewRow: {
+  empty: { alignItems: 'center', paddingVertical: spacing.lg },
+  searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    height: 46,
     marginBottom: spacing.sm,
   },
-  input: {
+  searchInput: { flex: 1, color: colors.text, fontSize: 14, marginLeft: spacing.sm },
+  chipScroll: { marginBottom: spacing.sm, flexGrow: 0 },
+  chip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    marginRight: spacing.xs,
+  },
+  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipText: { fontSize: 13, fontWeight: '600', color: colors.text },
+  historyTop: { flexDirection: 'row', alignItems: 'center' },
+  details: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  receiptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: 10,
+    marginTop: spacing.sm,
+  },
+  receiptText: { color: colors.white, fontWeight: '700', marginLeft: 6, fontSize: 13 },
+  historyRow: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.md,
-    fontSize: 15,
-    color: colors.text,
     marginBottom: spacing.sm,
   },
-  row: {
-    flexDirection: 'row',
-    gap: spacing.sm,
+  historyIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: `${colors.success}20`,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  inputThird: {
-    flex: 1,
-  },
-  footer: {
-    padding: spacing.md,
-  },
+  footer: { padding: spacing.md },
   payButton: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,
     paddingVertical: spacing.md,
     alignItems: 'center',
-  },
-  payButtonDisabled: {
-    opacity: 0.5,
   },
 });

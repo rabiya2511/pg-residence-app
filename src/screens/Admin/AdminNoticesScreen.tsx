@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, Switch } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, Switch, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAnnouncements, NoticeWithExpiry } from '../../context/AnnouncementsContext';
 import { NOTICE_CATEGORIES, categoryOf } from '../../constants/noticeCategories';
+import { uploadImage } from '../../utils/uploadImage';
 
 function expiryLabel(expiresAt?: number) {
   if (!expiresAt) return null;
@@ -15,7 +17,7 @@ function expiryLabel(expiresAt?: number) {
   return `Auto-clears in ${days} day${days === 1 ? '' : 's'}`;
 }
 
-function NoticeCard({ notice, onDelete }: { notice: NoticeWithExpiry; onDelete: () => void }) {
+function NoticeCard({ notice, onDelete, onPin }: { notice: NoticeWithExpiry; onDelete: () => void; onPin: () => void }) {
   const expiry = expiryLabel(notice.expiresAt);
   return (
     <View style={styles.card}>
@@ -28,11 +30,22 @@ function NoticeCard({ notice, onDelete }: { notice: NoticeWithExpiry; onDelete: 
           <Text style={[typography.caption, { color: colors.textMuted, marginLeft: spacing.sm }]}>
             {notice.date}
           </Text>
+          <TouchableOpacity onPress={onPin} hitSlop={8} style={{ marginLeft: spacing.sm }}>
+            <Ionicons
+              name={notice.pinned ? 'pin' : 'pin-outline'}
+              size={18}
+              color={notice.pinned ? colors.primary : colors.textMuted}
+            />
+          </TouchableOpacity>
           <TouchableOpacity onPress={onDelete} hitSlop={8} style={{ marginLeft: spacing.sm }}>
             <Ionicons name="trash-outline" size={18} color={colors.error} />
           </TouchableOpacity>
         </View>
+        {!!notice.pinned && (
+          <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginTop: 2 }]}>Pinned</Text>
+        )}
         <Text style={[typography.body, styles.description]}>{notice.description}</Text>
+        {!!notice.imageUri && <Image source={{ uri: notice.imageUri }} style={styles.noticeImage} resizeMode="cover" />}
         {!!expiry && (
           <View style={styles.expiryRow}>
             <Ionicons name="time-outline" size={13} color={colors.warning} />
@@ -45,16 +58,42 @@ function NoticeCard({ notice, onDelete }: { notice: NoticeWithExpiry; onDelete: 
 }
 
 export default function AdminNoticesScreen() {
-  const { announcements, addAnnouncement, deleteAnnouncement, clearAllAnnouncements } = useAnnouncements();
+  const { announcements, addAnnouncement, setPinned, deleteAnnouncement, clearAllAnnouncements } = useAnnouncements();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [autoClear, setAutoClear] = useState(false);
   const [categoryId, setCategoryId] = useState(NOTICE_CATEGORIES[0].id);
+  const [pinned, setPinnedNew] = useState(false);
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
 
-  const handleSend = () => {
+  const pickImage = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
+      if (!res.canceled && res.assets?.length) setImageUri(res.assets[0].uri);
+    } catch (e: any) {
+      console.warn('notice image:', e?.message ?? e);
+      Alert.alert('Unable to Open Files', 'Could not open the file browser on this device.');
+    }
+  };
+
+  const handleSend = async () => {
+    if (sending) return;
     if (!title.trim() || !description.trim()) {
       Alert.alert('Missing Fields', 'Please enter both a title and a message.');
       return;
+    }
+    let uploaded: string | undefined;
+    if (imageUri) {
+      setSending(true);
+      try {
+        uploaded = await uploadImage(imageUri, `notices/${Date.now()}.jpg`);
+      } catch {
+        setSending(false);
+        Alert.alert('Image Failed', 'The image could not be prepared. Try a different picture or send without it.');
+        return;
+      }
+      setSending(false);
     }
     addAnnouncement(
       {
@@ -62,12 +101,16 @@ export default function AdminNoticesScreen() {
         description: description.trim(),
         icon: categoryOf({ category: categoryId }).icon,
         category: categoryId,
+        ...(pinned ? { pinned: true } : {}),
+        ...(uploaded ? { imageUri: uploaded } : {}),
       },
       autoClear ? { autoClearAfterDays: 7 } : undefined
     );
     setTitle('');
     setDescription('');
     setAutoClear(false);
+    setPinnedNew(false);
+    setImageUri(null);
     setCategoryId(NOTICE_CATEGORIES[0].id);
     Alert.alert(
       'Sent',
@@ -143,6 +186,34 @@ export default function AdminNoticesScreen() {
           multiline
           numberOfLines={3}
         />
+        {imageUri ? (
+          <View style={styles.attachWrap}>
+            <Image source={{ uri: imageUri }} style={styles.noticeImage} resizeMode="cover" />
+            <TouchableOpacity style={styles.attachRemove} onPress={() => setImageUri(null)} hitSlop={6}>
+              <Ionicons name="close" size={14} color={colors.white} />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.attachBtn} onPress={pickImage} activeOpacity={0.8}>
+            <Ionicons name="image-outline" size={18} color={colors.primary} />
+            <Text style={[typography.bodyBold, { color: colors.primary, marginLeft: 6 }]}>Attach image (optional)</Text>
+          </TouchableOpacity>
+        )}
+        <View style={styles.autoClearRow}>
+          <Ionicons name="pin-outline" size={18} color={colors.textMuted} />
+          <View style={{ flex: 1, marginLeft: spacing.sm }}>
+            <Text style={[typography.bodyBold, { color: colors.text }]}>Pin to top</Text>
+            <Text style={[typography.caption, { color: colors.textMuted }]}>
+              Pinned notices stay at the top of every resident's list.
+            </Text>
+          </View>
+          <Switch
+            value={pinned}
+            onValueChange={setPinnedNew}
+            trackColor={{ false: colors.border, true: colors.primary }}
+            thumbColor={colors.white}
+          />
+        </View>
         <View style={styles.autoClearRow}>
           <Ionicons name="time-outline" size={18} color={colors.textMuted} />
           <View style={{ flex: 1, marginLeft: spacing.sm }}>
@@ -158,11 +229,17 @@ export default function AdminNoticesScreen() {
             thumbColor={colors.white}
           />
         </View>
-        <TouchableOpacity style={styles.sendButton} activeOpacity={0.85} onPress={handleSend}>
-          <Ionicons name="send" size={16} color={colors.white} />
-          <Text style={[typography.button, { color: colors.white, marginLeft: spacing.xs }]}>
-            Send to All Residents
-          </Text>
+        <TouchableOpacity style={[styles.sendButton, sending && { opacity: 0.7 }]} activeOpacity={0.85} onPress={handleSend} disabled={sending}>
+          {sending ? (
+            <ActivityIndicator color={colors.white} />
+          ) : (
+            <>
+              <Ionicons name="send" size={16} color={colors.white} />
+              <Text style={[typography.button, { color: colors.white, marginLeft: spacing.xs }]}>
+                Send to All Residents
+              </Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -171,7 +248,9 @@ export default function AdminNoticesScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
-        renderItem={({ item }) => <NoticeCard notice={item} onDelete={() => confirmDelete(item)} />}
+        renderItem={({ item }) => (
+          <NoticeCard notice={item} onDelete={() => confirmDelete(item)} onPin={() => setPinned(item.id, !item.pinned)} />
+        )}
         ListHeaderComponent={
           <Text style={[typography.heading3, { color: colors.text, marginBottom: spacing.sm }]}>
             Sent Notices
@@ -292,6 +371,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 6,
+  },
+  noticeImage: { width: '100%', height: 150, borderRadius: radius.md, marginTop: spacing.sm },
+  attachWrap: { marginBottom: spacing.sm },
+  attachRemove: {
+    position: 'absolute', top: 14, right: 6, width: 22, height: 22, borderRadius: 11,
+    backgroundColor: colors.error, alignItems: 'center', justifyContent: 'center',
+  },
+  attachBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: colors.primary, borderRadius: radius.md,
+    paddingVertical: spacing.sm, marginBottom: spacing.sm,
   },
   autoClearRow: {
     flexDirection: 'row',

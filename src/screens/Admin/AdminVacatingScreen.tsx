@@ -11,16 +11,27 @@ import {
   Alert,
   Platform,
   KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { getFirestore, doc, updateDoc } from '@react-native-firebase/firestore';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { AdminResident, Room, getEmergencyVacateDeductionPercent } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
+import {
+  computeSettlement,
+  exitStatusOf,
+  heldDeposit,
+  noticeGivenDays,
+  unpaidRentRecords,
+  ExitStatus,
+  REQUIRED_NOTICE_DAYS,
+} from '../../utils/exitSettlement';
 
 const MONTHS_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -44,6 +55,15 @@ function formatDisplayDate(date: Date): string {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+const formatINR = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+const digitsOnly = (t: string) => t.replace(/\D/g, '').slice(0, 7);
+
+const STATUS_STYLE: Record<ExitStatus, { label: string; bg: string; fg: string }> = {
+  Pending: { label: 'Awaiting approval', bg: '#FEF3C7', fg: '#92400E' },
+  Approved: { label: 'Approved', bg: '#D1FAE5', fg: colors.success },
+  Rejected: { label: 'Rejected', bg: '#FEE2E2', fg: colors.error },
+};
+
 type VacateSection = { key: 'due' | 'upcoming'; title: string; data: AdminResident[] };
 
 function VacatingCard({
@@ -52,20 +72,36 @@ function VacatingCard({
   isEarliest,
   rooms,
   propertyName,
+  status,
+  busy,
   onCancel,
-  onCheckout,
+  onApprove,
+  onReject,
+  onSettle,
 }: {
   resident: AdminResident;
   isDue: boolean;
   isEarliest: boolean;
   rooms: Room[];
   propertyName: string;
+  status: ExitStatus;
+  busy: boolean;
   onCancel: () => void;
-  onCheckout: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+  onSettle: () => void;
 }) {
   const roomNumber = rooms.find((r) => r.id === resident.roomId)?.roomNumber ?? 'Unassigned';
   const deduction = resident.emergencyVacateDeductionPercent;
   const highlighted = isEarliest || isDue;
+  const r: any = resident;
+  const s = STATUS_STYLE[status];
+  const submittedTs = Number(r.vacateSubmittedAt) || 0;
+  const rejectReason: string | null = status === 'Rejected' ? r.exitDecision?.reason ?? null : null;
+
+  // Notice period tracking: days given against the one month required.
+  const given = noticeGivenDays(resident);
+  const short = given !== null && given < REQUIRED_NOTICE_DAYS;
 
   // "Vacating today" / "Vacated 3 days ago"
   let dueLabel = '';
@@ -98,9 +134,28 @@ function VacatingCard({
           <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]} numberOfLines={1}>
             Room {roomNumber} · {propertyName}
           </Text>
+          <View style={[styles.statusChip, { backgroundColor: s.bg }]}>
+            <Text style={[typography.caption, { color: s.fg, fontWeight: '700' }]}>{s.label}</Text>
+          </View>
           <Text style={[typography.bodyBold, { color: highlighted ? colors.error : colors.text, marginTop: spacing.xs }]}>
             {isDue ? `${dueLabel} · ${resident.vacatingDate}` : `Vacating on ${resident.vacatingDate}`}
           </Text>
+          {!!submittedTs && (
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+              Notice given on {formatDisplayDate(new Date(submittedTs))}
+            </Text>
+          )}
+          {given !== null && (
+            <Text
+              style={[
+                typography.caption,
+                { color: short && (deduction === null || deduction === undefined) ? colors.error : colors.textMuted, marginTop: 2 },
+              ]}
+            >
+              Notice period: {given} of {REQUIRED_NOTICE_DAYS} days
+              {short ? ` · short by ${REQUIRED_NOTICE_DAYS - given} day${REQUIRED_NOTICE_DAYS - given === 1 ? '' : 's'}` : ''}
+            </Text>
+          )}
           {deduction !== null && deduction !== undefined && (
             <Text style={[typography.caption, { color: colors.error, marginTop: 2 }]}>
               Emergency vacate · {deduction}% deduction
@@ -111,32 +166,83 @@ function VacatingCard({
               Reason: {resident.vacateReason}
             </Text>
           )}
+          {!!r.vacateRemarks && (
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]} numberOfLines={2}>
+              Remarks: {r.vacateRemarks}
+            </Text>
+          )}
+          {!!rejectReason && (
+            <Text style={[typography.caption, { color: colors.error, marginTop: 2 }]}>
+              Rejected: {rejectReason}
+            </Text>
+          )}
         </View>
       </View>
 
-      <View style={styles.buttonRow}>
-        {isDue && (
-          <TouchableOpacity style={styles.checkoutButton} activeOpacity={0.85} onPress={onCheckout}>
-            <Ionicons name="checkmark-done-outline" size={16} color={colors.white} />
-            <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>
-              Complete Checkout
+      {busy ? (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.sm }} />
+      ) : (
+        <View style={styles.buttonRow}>
+          {status === 'Pending' && (
+            <>
+              <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.success }]} activeOpacity={0.85} onPress={onApprove}>
+                <Ionicons name="checkmark-circle-outline" size={16} color={colors.white} />
+                <Text style={[typography.caption, styles.actionText]}>Approve</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.error }]} activeOpacity={0.85} onPress={onReject}>
+                <Ionicons name="close-circle-outline" size={16} color={colors.white} />
+                <Text style={[typography.caption, styles.actionText]}>Reject</Text>
+              </TouchableOpacity>
+            </>
+          )}
+          {status === 'Approved' && (
+            <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.primary }]} activeOpacity={0.85} onPress={onSettle}>
+              <Ionicons name="receipt-outline" size={16} color={colors.white} />
+              <Text style={[typography.caption, styles.actionText]}>Settlement & Checkout</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.cancelButton} activeOpacity={0.85} onPress={onCancel}>
+            <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+            <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
+              Cancel Vacate
             </Text>
           </TouchableOpacity>
-        )}
-        <TouchableOpacity style={styles.cancelButton} activeOpacity={0.85} onPress={onCancel}>
-          <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-          <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
-            Cancel Vacate
-          </Text>
-        </TouchableOpacity>
-      </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function SumRow({
+  label,
+  value,
+  negative,
+  bold,
+  muted,
+}: {
+  label: string;
+  value: string;
+  negative?: boolean;
+  bold?: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <View style={styles.sumRow}>
+      <Text style={[bold ? typography.bodyBold : typography.body, { color: muted ? colors.textMuted : colors.text, flex: 1 }]}>
+        {label}
+      </Text>
+      <Text style={[bold ? typography.bodyBold : typography.body, { color: negative ? colors.error : muted ? colors.textMuted : colors.text }]}>
+        {value}
+      </Text>
     </View>
   );
 }
 
 export default function AdminVacatingScreen() {
-  const { residents, rooms, properties, submitVacateNotice, archiveResident } = useAdmin();
+  const navigation = useNavigation<any>();
+  const { residents, rooms, properties, paymentRecords, submitVacateNotice, archiveResident } = useAdmin();
   const route = useRoute<any>();
+  const db = getFirestore();
   const requestedResidentId: string | undefined = route.params?.residentId;
   const handledRequestRef = useRef<string | null>(null);
 
@@ -147,6 +253,20 @@ export default function AdminVacatingScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [isEmergency, setIsEmergency] = useState(false);
   const [reason, setReason] = useState('');
+
+  // approve / reject
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  // settlement & checkout
+  const [settleId, setSettleId] = useState<string | null>(null);
+  const [additionalText, setAdditionalText] = useState('');
+  const [additionalNote, setAdditionalNote] = useState('');
+  const [maintenanceText, setMaintenanceText] = useState('');
+  const [advanceText, setAdvanceText] = useState('');
+  const [checks, setChecks] = useState({ room: false, keys: false, dues: false });
+  const [settleBusy, setSettleBusy] = useState(false);
 
   const getPropertyName = (propertyId: string) =>
     properties.find((p) => p.id === propertyId)?.name ?? 'Unknown Property';
@@ -167,6 +287,7 @@ export default function AdminVacatingScreen() {
   }, [residents]);
 
   const totalNotices = dueList.length + upcomingList.length;
+  const awaitingCount = [...dueList, ...upcomingList].filter((r) => exitStatusOf(r) === 'Pending').length;
 
   const sections: VacateSection[] = [
     { key: 'due' as const, title: 'Due for checkout', data: dueList },
@@ -187,6 +308,8 @@ export default function AdminVacatingScreen() {
   }, [residents, rooms, search]);
 
   const selectedResident = residents.find((r) => r.id === selectedResidentId);
+  const rejectResident = residents.find((r) => r.id === rejectId);
+  const settleResident = residents.find((r) => r.id === settleId);
 
   // Preview of the deduction an emergency vacate would carry, using the same
   // rule the context applies when it saves the notice.
@@ -196,6 +319,25 @@ export default function AdminVacatingScreen() {
     const daysNotice = Math.floor((vacateDate.getTime() - now.getTime()) / DAY_MS);
     return getEmergencyVacateDeductionPercent(Math.max(0, daysNotice));
   }, [isEmergency, vacateDate]);
+
+  // Unpaid rent months for the resident being checked out (the "pending clearance" list).
+  const unpaidItems = useMemo(
+    () => (settleResident ? unpaidRentRecords(settleResident.id, paymentRecords) : []),
+    [settleResident, paymentRecords]
+  );
+
+  // Live settlement figures for the resident being checked out.
+  const settlement = useMemo(() => {
+    if (!settleResident) return null;
+    return computeSettlement({
+      deposit: heldDeposit(settleResident),
+      emergencyPercent: settleResident.emergencyVacateDeductionPercent,
+      pendingRent: unpaidItems.reduce((sum, u) => sum + u.amount, 0),
+      additional: Number(additionalText) || 0,
+      pendingMaintenance: Number(maintenanceText) || 0,
+      advanceCredit: Number(advanceText) || 0,
+    });
+  }, [settleResident, unpaidItems, additionalText, maintenanceText, advanceText]);
 
   const openModal = () => {
     setSearch('');
@@ -234,8 +376,13 @@ export default function AdminVacatingScreen() {
       Alert.alert('Select a Resident', 'Please choose the resident who is vacating.');
       return;
     }
+    if (selectedResident.vacatingDate) {
+      Alert.alert('Already Vacating', `${selectedResident.name} already has an exit notice.`);
+      return;
+    }
     const dateStr = formatDisplayDate(vacateDate);
-    submitVacateNotice(selectedResident.id, dateStr, isEmergency, reason.trim() || null);
+    // Recorded by the admin, so it is approved straight away.
+    submitVacateNotice(selectedResident.id, dateStr, isEmergency, reason.trim() || null, null, true);
     setModalVisible(false);
     Alert.alert('Vacate Notice Recorded', `${selectedResident.name} will vacate on ${dateStr}.`);
   };
@@ -255,21 +402,184 @@ export default function AdminVacatingScreen() {
     );
   };
 
-  // Moves the resident to the archive: their bed is freed, their records are kept.
-  const handleCompleteCheckout = (resident: AdminResident) => {
+  const failMessage = (e: any) =>
+    e?.code === 'firestore/permission-denied'
+      ? 'Not allowed. Publish the latest Firestore rules and try again.'
+      : e?.code === 'timeout'
+      ? 'This is taking too long. Check your connection and try again.'
+      : 'Check your connection and try again.';
+
+  // Saves the admin's decision for THIS notice only (see exitStatusOf).
+  const saveDecision = async (r: AdminResident, status: 'Approved' | 'Rejected', why: string | null) => {
+    setBusyId(r.id);
+    try {
+      await Promise.race([
+        updateDoc(doc(db, 'residents', r.id), {
+          exitDecision: { status, for: Number((r as any).vacateSubmittedAt) || 0, at: Date.now(), reason: why },
+        }),
+        new Promise((_, reject) => setTimeout(() => reject({ code: 'timeout' }), 10000)),
+      ]);
+      return true;
+    } catch (e: any) {
+      console.warn('exit decision failed:', e?.code ?? e?.message);
+      Alert.alert('Could Not Save', failMessage(e));
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleApprove = (r: AdminResident) => {
+    Alert.alert('Approve Exit Notice', `Approve ${r.name}'s notice to vacate on ${r.vacatingDate}?`, [
+      { text: 'Not Yet', style: 'cancel' },
+      { text: 'Approve', onPress: () => saveDecision(r, 'Approved', null) },
+    ]);
+  };
+
+  const submitReject = async () => {
+    if (!rejectResident) return;
+    const ok = await saveDecision(rejectResident, 'Rejected', rejectReason.trim() || null);
+    if (ok) {
+      setRejectId(null);
+      setRejectReason('');
+    }
+  };
+
+  const openSettlement = (r: AdminResident) => {
+    const draft = (r as any).exitDraft ?? {};
+    setAdditionalText(draft.additional ? String(draft.additional) : '');
+    setAdditionalNote(draft.note ?? '');
+    setMaintenanceText(draft.pendingMaintenance ? String(draft.pendingMaintenance) : '');
+    setAdvanceText(draft.advanceCredit ? String(draft.advanceCredit) : '');
+    setChecks({ room: !!draft.roomInspection, keys: !!draft.keysReturned, dues: !!draft.duesReviewed });
+    setSettleId(r.id);
+  };
+
+  const closeSettlement = () => {
+    if (settleBusy) return;
+    setSettleId(null);
+  };
+
+  const draftPayload = () => ({
+    additional: Math.max(0, Math.round(Number(additionalText) || 0)),
+    note: additionalNote.trim() || null,
+    pendingMaintenance: Math.max(0, Math.round(Number(maintenanceText) || 0)),
+    advanceCredit: Math.max(0, Math.round(Number(advanceText) || 0)),
+    roomInspection: checks.room,
+    keysReturned: checks.keys,
+    duesReviewed: checks.dues,
+    savedAt: Date.now(),
+  });
+
+  // Keeps the deductions and checklist so the admin can come back later; the resident sees the estimate.
+  const saveDraft = async () => {
+    if (!settleResident) return;
+    setSettleBusy(true);
+    try {
+      await Promise.race([
+        updateDoc(doc(db, 'residents', settleResident.id), { exitDraft: draftPayload() }),
+        new Promise((_, reject) => setTimeout(() => reject({ code: 'timeout' }), 10000)),
+      ]);
+      Alert.alert('Saved', 'The settlement draft has been saved.');
+    } catch (e: any) {
+      console.warn('exit draft failed:', e?.code ?? e?.message);
+      Alert.alert('Could Not Save', failMessage(e));
+    } finally {
+      setSettleBusy(false);
+    }
+  };
+
+  const runCompleteCheckout = async () => {
+    if (!settleResident || !settlement) return;
+    const r = settleResident;
+    const s = settlement;
+    // One checkout record per stay: never write a second settlement over a finished one.
+    if ((r as any).exitSettlement?.completedAt) {
+      Alert.alert('Already Checked Out', `${r.name} already has a completed checkout.`);
+      return;
+    }
+    setSettleBusy(true);
+    try {
+      await Promise.race([
+        updateDoc(doc(db, 'residents', r.id), {
+          exitSettlement: {
+            deposit: s.deposit,
+            depositStatus: r.advanceDepositStatus ?? null,
+            advanceCredit: s.advanceCredit,
+            emergencyPercent: r.emergencyVacateDeductionPercent ?? null,
+            emergencyDeduction: s.emergencyDeduction,
+            pendingRent: s.pendingRent,
+            pendingRentItems: unpaidItems.map((u) => ({ month: u.month, amount: u.amount })),
+            pendingMaintenance: s.pendingMaintenance,
+            additionalDeductions: s.additional,
+            additionalNote: additionalNote.trim() || null,
+            totalDeductions: s.totalDeductions,
+            refund: s.refund,
+            amountOwed: s.amountOwed,
+            status: s.refund > 0 ? 'Refund Pending' : s.amountOwed > 0 ? 'Amount Owed' : 'Settled',
+            noticeDays: noticeGivenDays(r),
+            requiredNoticeDays: REQUIRED_NOTICE_DAYS,
+            roomInspection: true,
+            keysReturned: true,
+            duesReviewed: true,
+            completedOn: formatDisplayDate(new Date()),
+            completedAt: Date.now(),
+          },
+          exitDraft: null,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject({ code: 'timeout' }), 10000)),
+      ]);
+    } catch (e: any) {
+      console.warn('exit settlement failed:', e?.code ?? e?.message);
+      Alert.alert('Could Not Complete Checkout', failMessage(e));
+      setSettleBusy(false);
+      return;
+    }
+    // The settlement is saved. Now move the resident to the archive (frees the bed, keeps all records).
+    archiveResident(r.id, r.vacateReason ?? 'Vacated');
+    setSettleBusy(false);
+    setSettleId(null);
+    Alert.alert(
+      'Checkout Completed',
+      s.amountOwed > 0
+        ? `${r.name} has been checked out. Amount still owed by the resident: ${formatINR(s.amountOwed)}.\n\nTrack it in Checkout History.`
+        : `${r.name} has been checked out. Refund to the resident: ${formatINR(s.refund)}.\n\nMark it paid in Checkout History once you have returned it.`
+    );
+  };
+
+  const handleCompleteCheckout = () => {
+    if (!settleResident || !settlement) return;
+    if (!(checks.room && checks.keys && checks.dues)) {
+      Alert.alert('Checklist Incomplete', 'Tick every item in the checkout checklist before completing the checkout.');
+      return;
+    }
+    const early = parseVacatingDate(settleResident.vacatingDate ?? '') > startOfToday();
+    const result =
+      settlement.amountOwed > 0
+        ? `Resident owes ${formatINR(settlement.amountOwed)}`
+        : `Refund ${formatINR(settlement.refund)}`;
     Alert.alert(
       'Complete Checkout',
-      `Move ${resident.name} to the archive? Their bed will be freed and their records are kept.`,
+      `Check out ${settleResident.name} and move them to the archive?\n\n${result}${
+        early ? '\n\nNote: the vacating date has not arrived yet.' : ''
+      }`,
       [
         { text: 'Not Yet', style: 'cancel' },
-        {
-          text: 'Complete Checkout',
-          style: 'destructive',
-          onPress: () => archiveResident(resident.id, resident.vacateReason ?? 'Vacated'),
-        },
+        { text: 'Complete Checkout', style: 'destructive', onPress: runCompleteCheckout },
       ]
     );
   };
+
+  const checklistItems: { key: 'room' | 'keys' | 'dues'; label: string }[] = [
+    { key: 'room', label: 'Room inspection completed' },
+    { key: 'keys', label: 'Keys and belongings returned' },
+    { key: 'dues', label: 'Pending dues reviewed' },
+  ];
+  const checklistDone = checks.room && checks.keys && checks.dues;
+  const depositNotCollected =
+    !!settleResident &&
+    (settleResident.advanceDepositStatus === 'Not Paid') &&
+    (Number(settleResident.securityDeposit) || 0) > 0;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -278,9 +588,18 @@ export default function AdminVacatingScreen() {
           <Text style={[typography.heading2, { color: colors.text }]}>Vacating</Text>
           <Text style={[typography.body, { color: colors.textMuted }]}>
             {totalNotices} notice(s)
+            {awaitingCount > 0 ? ` · ${awaitingCount} awaiting approval` : ''}
             {dueList.length > 0 ? ` · ${dueList.length} due for checkout` : ''}
           </Text>
         </View>
+        <TouchableOpacity
+          style={styles.historyButton}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('AdminCheckoutHistory')}
+        >
+          <Ionicons name="time-outline" size={16} color={colors.primary} />
+          <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginLeft: 4 }]}>History</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.vacateButton} activeOpacity={0.85} onPress={openModal}>
           <Ionicons name="exit-outline" size={16} color={colors.white} />
           <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>
@@ -297,7 +616,7 @@ export default function AdminVacatingScreen() {
         stickySectionHeadersEnabled={false}
         ListEmptyComponent={
           <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
-            No vacate notices submitted yet.
+            No exit notices yet. When a resident submits one, Approve and Reject buttons appear here.
           </Text>
         }
         renderSectionHeader={({ section }) => (
@@ -315,12 +634,20 @@ export default function AdminVacatingScreen() {
             isEarliest={section.key === 'upcoming' && index === 0}
             rooms={rooms}
             propertyName={getPropertyName(item.propertyId)}
+            status={exitStatusOf(item)}
+            busy={busyId === item.id}
             onCancel={() => handleCancelVacate(item)}
-            onCheckout={() => handleCompleteCheckout(item)}
+            onApprove={() => handleApprove(item)}
+            onReject={() => {
+              setRejectReason('');
+              setRejectId(item.id);
+            }}
+            onSettle={() => openSettlement(item)}
           />
         )}
       />
 
+      {/* ---------------- Vacate Resident (admin-initiated, approved automatically) ---------------- */}
       <Modal visible={modalVisible} transparent animationType="fade" onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.overlay}>
@@ -434,6 +761,199 @@ export default function AdminVacatingScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* ---------------- Reject ---------------- */}
+      <Modal visible={!!rejectResident} transparent animationType="fade" onRequestClose={() => setRejectId(null)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.overlay}>
+            <View style={styles.sheet}>
+              <Text style={[typography.heading3, { color: colors.text }]}>Reject exit notice</Text>
+              <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2, marginBottom: spacing.sm }]}>
+                {rejectResident?.name}. The resident will see your reason.
+              </Text>
+              <TextInput
+                style={styles.reasonInput}
+                value={rejectReason}
+                onChangeText={setRejectReason}
+                placeholder="Reason (optional)"
+                placeholderTextColor={colors.textMuted}
+                multiline
+              />
+              <View style={styles.sheetButtons}>
+                <TouchableOpacity style={[styles.sheetBtn, { backgroundColor: colors.border }]} onPress={() => setRejectId(null)}>
+                  <Text style={[typography.caption, { color: colors.text, fontWeight: '700' }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.sheetBtn, { backgroundColor: colors.error }]} onPress={submitReject}>
+                  <Text style={[typography.caption, styles.actionText]}>Reject</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ---------------- Settlement & Checkout ---------------- */}
+      <Modal visible={!!settleResident} transparent animationType="fade" onRequestClose={closeSettlement}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.overlay}>
+            <View style={styles.sheet}>
+              <View style={styles.sheetHeader}>
+                <Text style={[typography.heading3, { color: colors.text }]}>Settlement & Checkout</Text>
+                <TouchableOpacity onPress={closeSettlement}>
+                  <Ionicons name="close" size={22} color={colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+
+              {settleResident && settlement && (
+                <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                  <Text style={[typography.bodyBold, { color: colors.text }]}>
+                    {settleResident.name} · Room {getRoomNumber(settleResident.roomId)}
+                  </Text>
+                  <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                    Vacating {settleResident.vacatingDate}
+                  </Text>
+
+                  <View style={styles.summaryBox}>
+                    <SumRow
+                      label={depositNotCollected ? 'Security deposit (not collected)' : 'Security deposit'}
+                      value={formatINR(settlement.deposit)}
+                      muted={depositNotCollected}
+                    />
+                    {settlement.advanceCredit > 0 && (
+                      <SumRow label="Advance balance returned" value={`+ ${formatINR(settlement.advanceCredit)}`} />
+                    )}
+                    {settlement.emergencyDeduction > 0 && (
+                      <SumRow
+                        label={`Emergency deduction (${settleResident.emergencyVacateDeductionPercent}%)`}
+                        value={`− ${formatINR(settlement.emergencyDeduction)}`}
+                        negative
+                      />
+                    )}
+                    {settlement.pendingRent > 0 && (
+                      <SumRow label="Pending rent" value={`− ${formatINR(settlement.pendingRent)}`} negative />
+                    )}
+                    {settlement.pendingMaintenance > 0 && (
+                      <SumRow label="Pending maintenance" value={`− ${formatINR(settlement.pendingMaintenance)}`} negative />
+                    )}
+                    {settlement.additional > 0 && (
+                      <SumRow label="Other deductions" value={`− ${formatINR(settlement.additional)}`} negative />
+                    )}
+                    <View style={styles.sumDivider} />
+                    {settlement.amountOwed > 0 ? (
+                      <SumRow label="Resident owes" value={formatINR(settlement.amountOwed)} negative bold />
+                    ) : (
+                      <SumRow label="Refundable amount" value={formatINR(settlement.refund)} bold />
+                    )}
+                  </View>
+                  {depositNotCollected && (
+                    <Text style={[typography.caption, { color: colors.warning, marginTop: spacing.xs }]}>
+                      The {formatINR(Number(settleResident.securityDeposit) || 0)} deposit was marked Not Paid, so nothing is held to refund.
+                    </Text>
+                  )}
+
+                  <Text style={[typography.caption, styles.label]}>Pending clearance</Text>
+                  <View style={styles.clearanceBox}>
+                    {unpaidItems.length === 0 ? (
+                      <Text style={[typography.caption, { color: colors.success }]}>No pending rent. All months are paid.</Text>
+                    ) : (
+                      unpaidItems.map((u) => (
+                        <View key={u.id} style={styles.sumRow}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[typography.body, { color: colors.text }]}>{u.month}</Text>
+                            <Text style={[typography.caption, { color: colors.textMuted }]}>
+                              Due {u.dueDate} · {u.status}
+                            </Text>
+                          </View>
+                          <Text style={[typography.bodyBold, { color: colors.error }]}>{formatINR(u.amount)}</Text>
+                        </View>
+                      ))
+                    )}
+                  </View>
+
+                  <Text style={[typography.caption, styles.label]}>Pending maintenance (₹)</Text>
+                  <TextInput
+                    style={styles.reasonInput}
+                    value={maintenanceText}
+                    onChangeText={(t) => setMaintenanceText(digitsOnly(t))}
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="number-pad"
+                  />
+                  <Text style={[typography.caption, styles.label]}>Advance balance to return (₹)</Text>
+                  <TextInput
+                    style={styles.reasonInput}
+                    value={advanceText}
+                    onChangeText={(t) => setAdvanceText(digitsOnly(t))}
+                    placeholder="0 (rent paid in advance, if any)"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="number-pad"
+                  />
+                  <Text style={[typography.caption, styles.label]}>Other deductions (₹) — damages, keys, etc.</Text>
+                  <TextInput
+                    style={styles.reasonInput}
+                    value={additionalText}
+                    onChangeText={(t) => setAdditionalText(digitsOnly(t))}
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="number-pad"
+                  />
+                  <Text style={[typography.caption, styles.label]}>Note for deductions</Text>
+                  <TextInput
+                    style={styles.reasonInput}
+                    value={additionalNote}
+                    onChangeText={setAdditionalNote}
+                    placeholder="e.g. Broken chair, lost key"
+                    placeholderTextColor={colors.textMuted}
+                    multiline
+                  />
+
+                  <Text style={[typography.caption, styles.label]}>Checkout checklist</Text>
+                  {checklistItems.map((c) => (
+                    <TouchableOpacity
+                      key={c.key}
+                      style={styles.checkRow}
+                      activeOpacity={0.8}
+                      onPress={() => setChecks((prev) => ({ ...prev, [c.key]: !prev[c.key] }))}
+                    >
+                      <Ionicons
+                        name={checks[c.key] ? 'checkbox' : 'square-outline'}
+                        size={22}
+                        color={checks[c.key] ? colors.success : colors.textMuted}
+                      />
+                      <Text style={[typography.body, { color: colors.text, marginLeft: spacing.sm }]}>{c.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+
+                  <View style={styles.sheetButtons}>
+                    <TouchableOpacity
+                      style={[styles.sheetBtn, { backgroundColor: colors.border }, settleBusy && { opacity: 0.6 }]}
+                      onPress={saveDraft}
+                      disabled={settleBusy}
+                    >
+                      <Text style={[typography.caption, { color: colors.text, fontWeight: '700' }]}>Save Draft</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.sheetBtn,
+                        { backgroundColor: colors.success, flex: 2 },
+                        (!checklistDone || settleBusy) && { opacity: 0.5 },
+                      ]}
+                      onPress={handleCompleteCheckout}
+                      disabled={settleBusy}
+                    >
+                      {settleBusy ? (
+                        <ActivityIndicator color={colors.white} />
+                      ) : (
+                        <Text style={[typography.caption, styles.actionText]}>Complete Checkout</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -444,6 +964,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.md,
+  },
+  historyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginRight: spacing.xs,
   },
   vacateButton: {
     flexDirection: 'row',
@@ -503,26 +1033,36 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     marginLeft: spacing.xs,
   },
+  statusChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    marginTop: spacing.xs,
+  },
   buttonRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.sm,
   },
-  checkoutButton: {
-    flex: 1,
+  actionButton: {
+    flexGrow: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.sm,
     borderRadius: radius.md,
-    backgroundColor: colors.success,
   },
+  actionText: { color: colors.white, fontWeight: '700', marginLeft: 6 },
   cancelButton: {
-    flex: 1,
+    flexGrow: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.sm,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.error,
@@ -545,6 +1085,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.sm,
   },
+  sheetButtons: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  sheetBtn: {
+    flex: 1,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm + 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryBox: {
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  clearanceBox: {
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  sumRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  sumDivider: { height: 1, backgroundColor: colors.border, marginVertical: spacing.xs },
+  checkRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.xs + 2 },
   label: { color: colors.textMuted, marginBottom: spacing.xs, marginTop: spacing.sm },
   searchBox: {
     flexDirection: 'row',
@@ -606,7 +1172,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     color: colors.text,
     fontSize: 14,
-    minHeight: 72,
+    minHeight: 48,
     textAlignVertical: 'top',
   },
   confirmButton: {

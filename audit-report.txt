@@ -1,0 +1,190 @@
+﻿=============== PG RESIDENCE APP AUDIT ===============
+Date: 11/02/2026 10:43:35
+
+--- PHASE 1: Core resident portal ---
+  [OK]      Home                               src\screens\Home\HomeScreen.tsx
+  [OK]      Stay overview card                 src\components\home\StayOverviewCard.tsx
+  [OK]      Profile                            src\screens\Profile\ProfileScreen.tsx
+  [OK]      Edit profile                       src\screens\Profile\EditProfileScreen.tsx
+  [OK]      Stay & Room details                src\screens\Stay\StayDetailsScreen.tsx
+  [OK]      Rent details                       src\screens\Rent\RentDetailsScreen.tsx
+  [OK]      Pay rent                           src\screens\Rent\PayRentScreen.tsx
+  [OK]      Payment success                    src\screens\Rent\PaymentSuccessScreen.tsx
+  [OK]      Notices                            src\screens\Notices\NoticesScreen.tsx
+  [OK]      Notifications                      src\screens\Notifications\NotificationsScreen.tsx
+  [OK]      Notice read state                  src\utils\noticeReads.ts
+  [OK]      Notice categories                  src\constants\noticeCategories.ts
+  [OK]      Settings                           src\screens\Settings\SettingsScreen.tsx
+  [OK]      App settings store                 src\utils\appSettings.ts
+  [OK]      Inactivity guard                   src\components\common\InactivityGuard.tsx
+
+--- PHASE 2: Resident services ---
+  [OK]      Complaints list                    src\components\complaints\ComplaintsListScreen.tsx
+  [OK]      New complaint                      src\screens\Complaints\NewComplaintScreen.tsx
+  [OK]      Admin complaints                   src\screens\Admin\AdminComplaintsScreen.tsx
+  [OK]      Visitors                           src\screens\Visitors\VisitorsScreen.tsx
+  [OK]      New visitor                        src\screens\Visitors\NewVisitorScreen.tsx
+  [OK]      Admin visitors                     src\screens\Admin\AdminVisitorsScreen.tsx
+  [OK]      Admin visitors hook                src\hooks\useAdminVisitors.ts
+  [OK]      Food (resident)                    src\screens\Food\FoodScreen.tsx
+  [OK]      Food (admin)                       src\screens\Admin\AdminFoodMenuScreen.tsx
+  [OK]      Laundry (admin)                    src\screens\Admin\AdminLaundryScreen.tsx
+  [OK]      Laundry hook                       src\hooks\useLaundry.ts
+  [OK]      Laundry (resident)                 src\screens\Laundry\LaundryScreen.tsx
+  [OK]      Laundry (resident)                 src\screens\Laundry\NewLaundryScreen.tsx
+  [OK]      Help & Support                     src\screens\Help\HelpSupportScreen.tsx
+  [OK]      Support chat/ticket                src\screens\Help\SupportChatScreen.tsx
+  [OK]      Admin support                      src\screens\Admin\AdminSupportScreen.tsx
+  [OK]      Support tickets hook               src\hooks\useSupportTickets.ts
+
+--- PHASE 3: Resident operations ---
+  [OK]      Vacate notice (res)                src\screens\Resident\VacateNoticeScreen.tsx
+  [OK]      Admin vacating                     src\screens\Admin\AdminVacatingScreen.tsx
+  [OK]      Exit: refund calc                  e.g. src\constants\mockData.ts
+  [OK]      Exit: settlement                   e.g. src\constants\communicationsData.ts
+  [OK]      Exit: inspection                   e.g. src\screens\Admin\AdminDailyGuestsScreen.tsx
+  [OK]      Exit: checklist                    e.g. src\screens\Admin\AdminVacatingScreen.tsx
+  [NONE]    Exit: approve/reject               no match for: approveVacate
+  [OK]      Exit: checkout done                e.g. src\screens\Admin\AdminVacatingScreen.tsx
+  [OK]      Documents (resident)               src\screens\Documents\DocumentsScreen.tsx
+  [OK]      Documents context                  src\context\DocumentsContext.tsx
+  [OK]      Document card                      src\components\documents\DocumentCard.tsx
+  [OK]      Admin documents                    src\screens\Admin\AdminIdentityDocumentsScreen.tsx
+  [OK]      Facilities (resident)              src\screens\Facilities\FacilitiesScreen.tsx
+  [OK]      Facilities (admin)                 src\screens\Admin\AdminFacilitiesScreen.tsx
+  [OK]      Facilities hook                    src\hooks\useFacilities.ts
+  [OK]      Feedback (resident)                src\screens\Feedback\FeedbackScreen.tsx
+  [OK]      Feedback (admin)                   src\screens\Admin\AdminFeedbackScreen.tsx
+  [OK]      Feedback hook                      src\hooks\useFeedback.ts
+  [OK]      Rules (resident)                   src\screens\Rules\RulesScreen.tsx
+  [OK]      Rules (admin)                      src\screens\Admin\AdminRulesScreen.tsx
+  [OK]      Rules hook                         src\hooks\useRules.ts
+
+--- RENT / PAYMENTS (spec section 4) ---
+  [OK]      UPI deep link                      e.g. src\context\CommunicationsContext.tsx
+  [OK]      Razorpay                           e.g. src\types\react-native-razorpay.d.ts
+  [NONE]    Partially Paid status              no match for: Partially Paid
+  [NONE]    Under Verification                 no match for: Under Verification
+  [NONE]    Late fee                           no match for: lateFee
+  [OK]      Deposit refund                     e.g. src\constants\termsAndConditions.ts
+  [NONE]    Advance balance                    no match for: advanceBalance
+  [OK]      Receipt PDF                        e.g. src\screens\Admin\AdminReportsDetailsScreen.tsx
+
+--- WIRING: resident navigator (AppNavigator.tsx) ---
+  [OK]      route Settings
+  [OK]      route Facilities
+  [OK]      route Feedback
+  [OK]      route Rules
+  [OK]      route Laundry
+  [OK]      route Documents
+  [OK]      route StayDetails
+  [OK]      route VacateNotice
+  [OK]      route Visitors
+  [OK]      route Complaints
+  [OK]      route Food
+  [OK]      route HelpSupport
+  [OK]      route SupportChat
+
+--- WIRING: route types (navigation.ts) ---
+  [OK]      type Settings
+  [OK]      type Facilities
+  [OK]      type Feedback
+  [OK]      type Rules
+  [OK]      type Laundry
+
+--- WIRING: Profile menu (ProfileScreen.tsx) ---
+  [OK]      menu Settings
+  [OK]      menu Facilities & Info
+  [OK]      menu Feedback
+  [OK]      menu Rules & Regulations
+  [MISSING] menu Laundry                       not found in ProfileScreen.tsx
+
+--- WIRING: admin navigator (AdminStackNavigator.tsx) ---
+  [OK]      route AdminVisitors
+  [OK]      route AdminFoodMenu
+  [OK]      route AdminSupport
+  [OK]      route AdminLaundry
+  [OK]      route AdminFacilities
+  [OK]      route AdminFeedback
+  [OK]      route AdminRules
+  [OK]      route AdminVacating
+
+--- WIRING: admin dashboard tiles (AdminDashboardScreen.tsx) ---
+  [OK]      tile AdminVisitors
+  [OK]      tile AdminFoodMenu
+  [OK]      tile AdminSupport
+  [OK]      tile AdminLaundry
+  [OK]      tile AdminFacilities
+  [OK]      tile AdminFeedback
+  [OK]      tile AdminRules
+
+--- WIRING: Home quick actions (HomeScreen.tsx / mockData.ts) ---
+  [MISSING] home action facilities
+  [MISSING] home action feedback
+  [MISSING] home action rules
+  [OK]      home action laundry
+
+--- FIRESTORE RULES (local copy, if you keep one) ---
+  No firestore.rules file in the project. Check these collections in Firebase Console > Firestore > Rules:  visitors, supportTickets, foodMenus, foodFeedback, facilities, feedback, rules, ruleAcks, laundry
+
+--- CLEAN-UP / RISK CHECKS ---
+  [OK]      useNetRent.ts not present
+  [OK]      readNotices.ts not present
+  [CHECK]   src\screens\Auth\PhoneLoginScreen.tsx:24  // Set SHOW_DEMO_LOGINS to false before you give the app to real users:
+  [CHECK]   src\screens\Auth\PhoneLoginScreen.tsx:26  const SHOW_DEMO_LOGINS = true;
+  [CHECK]   src\screens\Auth\PhoneLoginScreen.tsx:123  {SHOW_DEMO_LOGINS && (
+  [INFO]    screens still importing mockData: 42
+  [INFO]    'Coming Soon' placeholders left: 5
+            src\screens\Admin\AdminHomeScreen.tsx:16
+            src\screens\Home\HomeScreen.tsx:36
+            src\screens\Home\HomeScreen.tsx:85
+            src\screens\Profile\ProfileScreen.tsx:88
+            src\screens\Resident\ProfileScreen.tsx:79
+
+--- TYPESCRIPT CHECK (npx tsc --noEmit) ---
+  TypeScript errors: 0
+
+--- GIT ---
+  changed/untracked files: 59
+     M App.tsx
+     M src/components/home/RentStatusCard.tsx
+     M src/components/home/StayOverviewCard.tsx
+     M src/components/visitors/VisitorCard.tsx
+     M src/context/AdminContext.tsx
+     M src/context/ComplaintsContext.tsx
+     M src/context/FoodContext.tsx
+     M src/context/VisitorsContext.tsx
+     M src/navigation/AdminStackNavigator.tsx
+     M src/navigation/AppNavigator.tsx
+     M src/screens/Admin/AdminComplaintsScreen.tsx
+     M src/screens/Admin/AdminDashboardScreen.tsx
+     M src/screens/Admin/AdminPropertiesScreen.tsx
+     M src/screens/Admin/AdminRentScreen.tsx
+     M src/screens/Admin/AdminResidentFormScreen.tsx
+     M src/screens/Admin/AdminRoomFormScreen.tsx
+     M src/screens/Admin/AdminVacatingScreen.tsx
+     M src/screens/Complaints/ComplaintsListScreen.tsx
+     M src/screens/Complaints/NewComplaintScreen.tsx
+     M src/screens/Food/FoodScreen.tsx
+     M src/screens/Help/HelpSupportScreen.tsx
+     M src/screens/Help/SupportChatScreen.tsx
+     M src/screens/Home/HomeScreen.tsx
+     M src/screens/Notices/NoticesScreen.tsx
+     M src/screens/Notifications/NotificationsScreen.tsx
+     M src/screens/Profile/ProfileScreen.tsx
+     M src/screens/Rent/RentDetailsScreen.tsx
+     M src/screens/Resident/ProfileScreen.tsx
+     M src/screens/Resident/VacateNoticeScreen.tsx
+     M src/screens/Visitors/NewVisitorScreen.tsx
+     M src/screens/Visitors/VisitorsScreen.tsx
+     M src/types/navigation.ts
+    ?? audit.ps1
+    ?? src/components/common/InactivityGuard.tsx
+    ?? src/constants/complaintOptions.ts
+    ?? src/constants/noticeCategories.ts
+    ?? src/hooks/useAdminSupport.ts
+    ?? src/hooks/useAdminVisitors.ts
+    ?? src/hooks/useFacilities.ts
+    ?? src/hooks/useFeedback.ts
+
+=============== END ===============

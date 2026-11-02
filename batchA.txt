@@ -1,0 +1,1138 @@
+﻿
+===== FILE: src\screens\Home\HomeScreen.tsx =====
+
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Image } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import { colors } from '../../constants/colors';
+import { spacing, radius } from '../../constants/spacing';
+import { typography } from '../../constants/typography';
+import { quickActions } from '../../constants/mockData';
+import { useRent } from '../../context/RentContext';
+import { useResident } from '../../context/ResidentContext';
+import { useAnnouncements } from '../../context/AnnouncementsContext';
+import { useComplaints } from '../../context/ComplaintsContext';
+import { useVisitors } from '../../context/VisitorsContext';
+import { useMockAuth } from '../../context/MockAuthContext';
+import { useNoticeReads } from '../../utils/noticeReads';
+import SectionHeader from '../../components/common/SectionHeader';
+import ResidentAvatar from '../../components/common/ResidentAvatar';
+import StayOverviewCard from '../../components/home/StayOverviewCard';
+import QuickActionCard from '../../components/home/QuickActionCard';
+import RentStatusCard from '../../components/home/RentStatusCard';
+import AnnouncementCard from '../../components/home/AnnouncementCard';
+import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
+import { ResidentAdPopup } from '../../components/common/AdPopupModal';
+
+// Greeting follows the phone's local time instead of always saying "Good Morning".
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good Morning';
+  if (hour < 17) return 'Good Afternoon';
+  return 'Good Evening';
+}
+
+const LATEST_UPDATES_LIMIT = 3;
+
+// Quick action id -> screen. An id that is not listed here shows "Coming Soon".
+const ACTION_ROUTES: Record<string, string> = {
+  complaints: 'Complaints',
+  rent: 'RentDetails',
+  maintenance: 'Maintenance',
+  food: 'Food',
+  notices: 'Notices',
+  visitors: 'Visitors',
+  nearby: 'NearbyPlaces',
+  vacate: 'VacateNotice',
+  documents: 'Documents',
+  laundry: 'Laundry',
+};
+
+export default function HomeScreen() {
+  const navigation = useNavigation<any>();
+  const { rentStatus } = useRent();
+  const { residentData } = useResident();
+  const { announcements, pendingResidentNotice, clearPendingResidentNotice } = useAnnouncements();
+  const { complaints } = useComplaints();
+  const { visitorLogs } = useVisitors();
+  const { residentId } = useMockAuth();
+  const { isRead } = useNoticeReads(residentId);
+  const unreadNotices = announcements.filter((n) => !isRead(n.id)).length;
+
+  const [whatsappVisible, setWhatsappVisible] = useState(false);
+  const [newNoticeRecipients, setNewNoticeRecipients] = useState<WhatsAppRecipient[]>([]);
+
+  useEffect(() => {
+    if (pendingResidentNotice) {
+      setNewNoticeRecipients([
+        {
+          id: residentData.name,
+          name: residentData.name,
+          profileImageUri: residentData.profileImageUri,
+          message: `ðŸ“¢ ${pendingResidentNotice.title}\n\n${pendingResidentNotice.description}\n\nâ€” Lokansh Aditya PG Residency`,
+        },
+      ]);
+      setWhatsappVisible(true);
+      clearPendingResidentNotice();
+    }
+  }, [pendingResidentNotice]);
+
+  const handleQuickActionPress = (actionId: string, label: string) => {
+    const route = ACTION_ROUTES[actionId];
+    if (route) {
+      navigation.navigate(route);
+      return;
+    }
+    Alert.alert(label, 'Coming Soon');
+  };
+
+  const latestUpdates = announcements.slice(0, LATEST_UPDATES_LIMIT);
+  const hasDeduction = (rentStatus.deduction ?? 0) > 0;
+
+  // "At a glance" tiles, all live from the same data the other screens use.
+  const pendingComplaints = complaints.filter((c) => c.status !== 'Resolved').length;
+  const visitorsInside = visitorLogs.filter((v) => v.status === 'Checked In').length;
+  const exitNoticeGiven = residentData.stayStatus === 'Notice Given';
+  const outstanding = rentStatus.totalOutstanding;
+  const glance = [
+    {
+      key: 'dues',
+      icon: 'wallet-outline',
+      label: 'Outstanding',
+      value: `â‚¹${outstanding.toLocaleString('en-IN')}`,
+      alert: outstanding > 0,
+      onPress: () => navigation.navigate('RentDetails'),
+    },
+    {
+      key: 'complaints',
+      icon: 'construct-outline',
+      label: 'Pending complaints',
+      value: String(pendingComplaints),
+      alert: pendingComplaints > 0,
+      onPress: () => navigation.navigate('Complaints'),
+    },
+    {
+      key: 'visitors',
+      icon: 'people-outline',
+      label: 'Visitors inside',
+      value: String(visitorsInside),
+      alert: false,
+      onPress: () => navigation.navigate('Visitors'),
+    },
+    {
+      key: 'exit',
+      icon: 'exit-outline',
+      label: 'Exit notice',
+      value: exitNoticeGiven ? 'Submitted' : 'None',
+      alert: exitNoticeGiven,
+      onPress: () => navigation.navigate('VacateNotice'),
+    },
+  ];
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Image source={require('../../../assets/pg-logo.png')} style={styles.logo} />
+            <View style={{ flexShrink: 1 }}>
+              <Text style={[typography.heading2, { color: colors.text }]} numberOfLines={1}>
+                {getGreeting()}, {residentData.name}
+              </Text>
+              <Text style={[typography.body, { color: colors.textMuted }]}>
+                Welcome back to your PG
+              </Text>
+            </View>
+          </View>
+          <View style={styles.headerIcons}>
+            <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Notifications')}>
+              <Ionicons name="notifications-outline" size={22} color={colors.text} />
+              {unreadNotices > 0 && (
+                <View style={styles.bellBadge}>
+                  <Text style={styles.bellBadgeText}>{unreadNotices > 9 ? '9+' : unreadNotices}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.iconButton}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('MainTabs', { screen: 'Profile' })}
+            >
+              <ResidentAvatar uri={residentData.profileImageUri} name={residentData.name} size={32} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* My Stay */}
+        <StayOverviewCard
+          pgName={residentData.pgName}
+          room={residentData.room}
+          bed={residentData.bed}
+          monthlyRent={residentData.monthlyRent}
+          nextDueDate={residentData.nextDueDate}
+          stayStatus={residentData.stayStatus}
+          floor={residentData.floor}
+          checkInDate={residentData.joiningDate}
+        />
+
+        {/* Quick Actions */}
+        <View style={styles.section}>
+          <SectionHeader title="Quick Actions" />
+          <View style={styles.quickActionsGrid}>
+            {quickActions.map((action, index) => (
+              <QuickActionCard
+                key={action.id}
+                label={action.label}
+                icon={action.icon}
+                onPress={() => handleQuickActionPress(action.id, action.label)}
+                style={index % 3 !== 2 ? { marginRight: '3.5%' } : undefined}
+              />
+            ))}
+          </View>
+        </View>
+
+        {/* Rent Status */}
+        <View style={styles.section}>
+          <RentStatusCard
+            amount={rentStatus.amount}
+            monthLabel={rentStatus.monthLabel}
+            dueInDays={rentStatus.dueInDays}
+            status={rentStatus.status}
+          />
+          {hasDeduction && (
+            <View style={styles.deductionNote}>
+              <Ionicons name="information-circle-outline" size={16} color={colors.textMuted} />
+              <Text style={styles.deductionText}>
+                â‚¹{rentStatus.deduction} deducted by admin
+                {rentStatus.deductionReason ? ` Â· ${rentStatus.deductionReason}` : ''}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* At a glance */}
+        <View style={styles.section}>
+          <SectionHeader title="At a Glance" />
+          <View style={styles.glanceGrid}>
+            {glance.map((g) => (
+              <TouchableOpacity
+                key={g.key}
+                style={[styles.glanceTile, g.alert && styles.glanceTileAlert]}
+                activeOpacity={0.8}
+                onPress={g.onPress}
+              >
+                <Ionicons name={g.icon as any} size={20} color={g.alert ? colors.error : colors.primary} />
+                <Text style={[styles.glanceValue, g.alert && { color: colors.error }]} numberOfLines={1}>
+                  {g.value}
+                </Text>
+                <Text style={styles.glanceLabel} numberOfLines={1}>{g.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Latest Updates */}
+        <View style={styles.section}>
+          <SectionHeader title="Latest Updates" />
+          {latestUpdates.length === 0 ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="megaphone-outline" size={22} color={colors.textMuted} />
+              <Text style={styles.emptyText}>No new updates right now.</Text>
+            </View>
+          ) : (
+            latestUpdates.map((item) => (
+              <AnnouncementCard key={item.id} announcement={item} />
+            ))
+          )}
+          {announcements.length > LATEST_UPDATES_LIMIT && (
+            <TouchableOpacity
+              style={styles.viewAll}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('Notices')}
+            >
+              <Text style={styles.viewAllText}>View all notices</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </ScrollView>
+
+      <WhatsAppNotifyModal
+        visible={whatsappVisible}
+        onClose={() => setWhatsappVisible(false)}
+        title="New Notice"
+        recipients={newNoticeRecipients}
+      />
+
+      {/* Admin's advertisement pop-up: opens by itself once per login when a live ad exists */}
+      <ResidentAdPopup />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  scrollContent: {
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: spacing.md,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  logo: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    marginRight: spacing.sm,
+  },
+  headerIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  iconButton: {
+    marginLeft: spacing.sm,
+  },
+  section: {
+    marginTop: spacing.lg,
+  },
+  quickActionsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bellBadgeText: { color: colors.white, fontSize: 10, fontWeight: '700' },
+  glanceGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  glanceTile: {
+    width: '48.5%',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  glanceTileAlert: { borderColor: colors.error },
+  glanceValue: { marginTop: 6, fontSize: 18, fontWeight: '700', color: colors.text },
+  glanceLabel: { marginTop: 2, fontSize: 12, color: colors.textMuted },
+  deductionNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  deductionText: {
+    flex: 1,
+    marginLeft: 6,
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  emptyBox: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+  },
+  emptyText: {
+    marginTop: 6,
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  viewAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+  },
+  viewAllText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.primary,
+    marginRight: 2,
+  },
+});
+
+===== FILE: src\screens\Profile\ProfileScreen.tsx =====
+
+import React from 'react';
+import { View, Text, StyleSheet, ScrollView, Alert, Linking } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import { colors } from '../../constants/colors';
+import { spacing } from '../../constants/spacing';
+import { useResident } from '../../context/ResidentContext';
+import { useMockAuth } from '../../context/MockAuthContext';
+import { useAdmin } from '../../context/AdminContext';
+import SectionHeader from '../../components/common/SectionHeader';
+import ProfileHeader from '../../components/profile/ProfileHeader';
+import InfoCard from '../../components/common/InfoCard';
+import ProfileMenuItem from '../../components/profile/ProfileMenuItem';
+
+export default function ProfileScreen() {
+  const navigation = useNavigation<any>();
+  const { residentData } = useResident();
+  const { logout, residentId } = useMockAuth();
+  const { residents, properties } = useAdmin();
+
+  // The PG manager's contact, from the property this resident lives in.
+  const ownRecord: any = residents.find((r) => r.id === residentId);
+  const ownProperty: any = ownRecord ? properties.find((p) => p.id === ownRecord.propertyId) : undefined;
+  const managerName: string = ownProperty?.branchManager ?? '';
+  const managerPhone: string = ownProperty?.contactPhone ?? '';
+  const managerDial = managerPhone.replace(/[^\d+]/g, '');
+
+  const handleMenuPress = (label: string) => {
+    if (label === 'Logout') {
+      Alert.alert('Logout', 'Are you sure you want to logout?', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Logout', style: 'destructive', onPress: () => logout() },
+      ]);
+      return;
+    }
+    if (label === 'Call Manager') {
+      if (managerDial) {
+        Linking.openURL(`tel:${managerDial}`).catch(() =>
+          Alert.alert('Cannot Call', 'No phone app is available.')
+        );
+      }
+      return;
+    }
+    if (label === 'Stay & Room Details') {
+      navigation.navigate('StayDetails');
+      return;
+    }
+    if (label === 'Payment History') {
+      navigation.navigate('RentDetails');
+      return;
+    }
+    if (label === 'My Documents') {
+      navigation.navigate('Documents');
+      return;
+    }
+    if (label === 'Notifications') {
+      navigation.navigate('Notifications');
+      return;
+    }
+    if (label === 'Complaints') {
+      navigation.navigate('Complaints');
+      return;
+    }
+    if (label === 'Help & Support') {
+      navigation.navigate('HelpSupport');
+      return;
+    }
+    if (label === 'Settings') {
+      navigation.navigate('Settings');
+      return;
+    }
+    if (label === 'Privacy') {
+      navigation.navigate('Privacy');
+      return;
+    }
+    if (label === 'Facilities & Info') {
+  navigation.navigate('Facilities');
+  return;
+}
+  if (label === 'Feedback') {
+    navigation.navigate('Feedback');
+    return;
+  }
+    if (label === 'Rules & Regulations') {
+      navigation.navigate('Rules');
+       return;
+  }
+    Alert.alert(label, 'Coming Soon');
+  };
+
+  const personalInfoRows = [
+    { label: 'Full Name', value: residentData.name },
+    { label: 'Phone Number', value: residentData.phone },
+    { label: 'Email', value: residentData.email },
+    { label: 'Date of Birth', value: residentData.dob },
+    { label: 'Gender', value: residentData.gender },
+    { label: 'Occupation', value: residentData.occupation || 'â€”' },
+    { label: 'Occupation Address', value: residentData.occupationAddress || 'â€”' },
+    { label: 'Native Place', value: residentData.nativePlace || 'â€”' },
+    { label: 'Emergency Contact 1', value: residentData.emergencyContact1 || 'â€”' },
+    { label: 'Emergency Contact 2', value: residentData.emergencyContact2 || 'â€”' },
+  ];
+
+  const pgInfoRows = [
+    { label: 'PG Name', value: residentData.pgName },
+    { label: 'PG Manager', value: managerName || 'â€”' },
+    { label: 'Manager Contact', value: managerPhone || 'â€”' },
+    { label: 'Room Number', value: residentData.room },
+    { label: 'Bed Number', value: residentData.bed },
+    { label: 'Floor', value: residentData.floor },
+    { label: 'Joining Date', value: residentData.joiningDate },
+    { label: 'Monthly Rent', value: `â‚¹${residentData.monthlyRent}` },
+   
+
+  ];
+
+  const menuItems = [
+    ...(managerDial ? [{ label: 'Call Manager', icon: 'call-outline' }] : []),
+    { label: 'Stay & Room Details', icon: 'bed-outline' },
+    { label: 'My Documents', icon: 'document-text-outline' },
+    { label: 'Payment History', icon: 'receipt-outline' },
+    { label: 'Complaints', icon: 'alert-circle-outline' },
+    { label: 'Notifications', icon: 'notifications-outline' },
+    { label: 'Help & Support', icon: 'help-circle-outline' },
+    { label: 'Settings', icon: 'settings-outline' },
+    { label: 'Privacy', icon: 'lock-closed-outline' },
+    { label: 'Facilities & Info', icon: 'business-outline' },
+    { label: 'Feedback', icon: 'star-outline' },
+    { label: 'Rules & Regulations', icon: 'book-outline' },
+  ];
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <ProfileHeader
+          name={residentData.name}
+          email={residentData.email}
+          phone={residentData.phone}
+          photoUri={residentData.profileImageUri ?? undefined}
+          onEditPress={() => navigation.navigate('EditProfile')}
+        />
+
+        <View style={styles.section}>
+          <SectionHeader title="Personal Information" />
+          <InfoCard rows={personalInfoRows} />
+        </View>
+
+        <View style={styles.section}>
+          <SectionHeader title="PG Information" />
+          <InfoCard rows={pgInfoRows} />
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.menuCard}>
+            {menuItems.map((item) => (
+              <ProfileMenuItem
+                key={item.label}
+                label={item.label}
+                icon={item.icon}
+                onPress={() => handleMenuPress(item.label)}
+              />
+            ))}
+            <ProfileMenuItem
+              label="Logout"
+              icon="log-out-outline"
+              isLast
+              isDestructive
+              onPress={() => handleMenuPress('Logout')}
+            />
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  scrollContent: {
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+  },
+  section: {
+    marginTop: spacing.lg,
+  },
+  menuCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+});
+
+===== FILE: src\screens\Stay\StayDetailsScreen.tsx =====
+
+import React from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import { colors } from '../../constants/colors';
+import { spacing, radius } from '../../constants/spacing';
+import { typography } from '../../constants/typography';
+import { useAdmin } from '../../context/AdminContext';
+import { useMockAuth } from '../../context/MockAuthContext';
+
+const ordinal = (n: number) => {
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+  return `${n}${suffix}`;
+};
+const inr = (n: number) => `â‚¹${(n || 0).toLocaleString('en-IN')}`;
+
+function Row({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <View style={styles.row}>
+      <Text style={[typography.body, { color: colors.textMuted }]}>{label}</Text>
+      <Text style={[typography.bodyBold, styles.rowValue]}>{value || 'â€”'}</Text>
+    </View>
+  );
+}
+
+function Card({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHead}>
+        <Ionicons name={icon as any} size={18} color={colors.primary} />
+        <Text style={[typography.bodyBold, { color: colors.text, marginLeft: 8 }]}>{title}</Text>
+      </View>
+      {children}
+    </View>
+  );
+}
+
+// Everything here is read-only: the admin controls room, rent and deposit records.
+export default function StayDetailsScreen() {
+  const navigation = useNavigation<any>();
+  const { residents, rooms, properties } = useAdmin();
+  const { residentId } = useMockAuth();
+
+  const resident: any = residents.find((r) => r.id === residentId);
+  const room: any = resident ? rooms.find((r) => r.id === resident.roomId) : undefined;
+  const property: any = resident ? properties.find((p) => p.id === resident.propertyId) : undefined;
+
+  const phone: string = (property?.contactPhone ?? '').replace(/[^\d+]/g, '');
+  const address: string = property?.address ?? '';
+
+  const call = () => {
+    if (!phone) return;
+    Linking.openURL(`tel:${phone}`).catch(() => Alert.alert('Cannot Call', 'No phone app is available.'));
+  };
+  const openMap = () => {
+    const q = encodeURIComponent(`${property?.name ?? ''} ${address}`.trim());
+    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`).catch(() =>
+      Alert.alert('Cannot Open Maps', 'No maps app or browser is available.')
+    );
+  };
+
+  const deposit = Number(resident?.securityDeposit) || 0;
+  const advanceStatus: string = resident?.advanceDepositStatus ?? (deposit > 0 ? 'Paid' : 'No Advance');
+  const onNotice = !!resident?.vacatingDate;
+  const floor =
+    room == null ? '' : room.floor === 0 ? 'Ground Floor' : `Floor ${room.floor}`;
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={22} color={colors.text} />
+        </TouchableOpacity>
+        <Text style={[typography.heading3, { color: colors.text }]}>Stay & Room Details</Text>
+        <View style={{ width: 30 }} />
+      </View>
+
+      {!resident ? (
+        <View style={styles.empty}>
+          <Ionicons name="bed-outline" size={44} color={colors.textMuted} />
+          <Text style={[typography.body, { color: colors.textMuted, marginTop: spacing.sm }]}>
+            Your stay details are not available yet.
+          </Text>
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <Card title="Property" icon="business-outline">
+            <Row label="Name" value={property?.name} />
+            <Row label="Address" value={address} />
+            <Row label="Manager" value={property?.branchManager} />
+            <Row label="Contact" value={property?.contactPhone} />
+            <View style={styles.actions}>
+              {!!phone && (
+                <TouchableOpacity style={styles.actionBtn} onPress={call} activeOpacity={0.85}>
+                  <Ionicons name="call" size={16} color={colors.white} />
+                  <Text style={styles.actionText}>Call</Text>
+                </TouchableOpacity>
+              )}
+              {!!address && (
+                <TouchableOpacity style={styles.actionBtn} onPress={openMap} activeOpacity={0.85}>
+                  <Ionicons name="location" size={16} color={colors.white} />
+                  <Text style={styles.actionText}>Open in Maps</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </Card>
+
+          <Card title="Room" icon="bed-outline">
+            <Row label="Room number" value={room?.roomNumber} />
+            <Row label="Floor" value={floor} />
+            <Row label="Sharing" value={room ? `${room.capacity} Sharing` : ''} />
+          </Card>
+
+          <Card title="Stay" icon="calendar-outline">
+            <Row label="Check-in date" value={resident.joiningDate} />
+            <Row label="Stay status" value={onNotice ? 'Notice Given' : 'Active'} />
+            {onNotice && <Row label="Leaving on" value={String(resident.vacatingDate)} />}
+            {onNotice && !!resident.vacateReason && <Row label="Reason" value={resident.vacateReason} />}
+          </Card>
+
+          <Card title="Rent & Deposit" icon="wallet-outline">
+            <Row label="Monthly rent" value={inr(resident.monthlyRent)} />
+            <Row label="Rent due day" value={resident.rentDueDay ? `${ordinal(Number(resident.rentDueDay))} of every month` : ''} />
+            <Row label="Security deposit" value={deposit > 0 ? inr(deposit) : 'No advance'} />
+            {deposit > 0 && <Row label="Deposit status" value={advanceStatus} />}
+          </Card>
+
+          {!!property?.houseGuidelines && (
+            <Card title="House Rules" icon="document-text-outline">
+              <Text style={[typography.body, { color: colors.text }]}>{String(property.houseGuidelines)}</Text>
+            </Card>
+          )}
+
+          <Text style={[typography.caption, styles.footnote]}>
+            Room, rent and deposit are managed by the PG admin. Contact them for any correction.
+          </Text>
+        </ScrollView>
+      )}
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  backButton: { padding: spacing.xs },
+  content: { padding: spacing.md, paddingBottom: spacing.xl },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  cardHead: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
+  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
+  rowValue: { color: colors.text, flex: 1, textAlign: 'right', marginLeft: spacing.md },
+  actions: { flexDirection: 'row', marginTop: spacing.sm },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    marginRight: spacing.sm,
+  },
+  actionText: { color: colors.white, fontWeight: '600', marginLeft: 6, fontSize: 13 },
+  footnote: { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xs },
+});
+
+===== FILE: src\navigation\TabNavigator.tsx =====
+
+import React from 'react';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
+import HomeScreen from '../screens/Home/HomeScreen';
+import ProfileScreen from '../screens/Profile/ProfileScreen';
+import BookRoomScreen from '../screens/BookRoom/BookRoomScreen';
+import { RootTabParamList } from '../types/navigation';
+import { colors } from '../constants/colors';
+
+const Tab = createBottomTabNavigator<RootTabParamList>();
+
+export default function TabNavigator() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          borderTopWidth: 1,
+          height: 60,
+          paddingBottom: 8,
+          paddingTop: 8,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+        },
+        tabBarIcon: ({ color, size, focused }) => {
+          let iconName: string;
+          if (route.name === 'Home') {
+            iconName = focused ? 'home' : 'home-outline';
+          } else if (route.name === 'BookRoom') {
+            iconName = focused ? 'bed' : 'bed-outline';
+          } else {
+            iconName = focused ? 'person' : 'person-outline';
+          }
+          return <Ionicons name={iconName as any} size={size} color={color} />;
+        },
+      })}
+    >
+      <Tab.Screen name="Home" component={HomeScreen} />
+      <Tab.Screen name="BookRoom" component={BookRoomScreen} options={{ title: 'Book Room' }} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
+    </Tab.Navigator>
+  );
+}
+
+===== FILE: src\components\home\QuickActionCard.tsx =====
+
+import React from 'react';
+import { TouchableOpacity, Text, StyleSheet, View, ViewStyle } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../../constants/colors';
+import { spacing, radius } from '../../constants/spacing';
+import { typography } from '../../constants/typography';
+
+type Props = {
+  label: string;
+  icon: string;
+  onPress: () => void;
+  style?: ViewStyle;
+};
+
+export default function QuickActionCard({ label, icon, onPress, style }: Props) {
+  return (
+    <TouchableOpacity style={[styles.card, style]} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.iconWrap}>
+        <Ionicons name={icon as any} size={22} color={colors.primary} />
+      </View>
+      <Text style={[typography.caption, styles.label]} numberOfLines={1}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    width: '31%',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  iconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.full,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.xs,
+  },
+  label: {
+    color: colors.text,
+    textAlign: 'center',
+  },
+});
+
+===== FILE: src\context\ResidentContext.tsx =====
+
+import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { Alert } from 'react-native';
+import { useAdmin } from './AdminContext';
+import { useMockAuth } from './MockAuthContext';
+import { uploadImage } from '../utils/uploadImage';
+
+// The resident's profile, as the Home / Profile / Edit Profile screens use it.
+export type ResidentDataType = {
+  name: string;
+  pgName: string;
+  room: string;
+  bed: string;
+  floor: string;
+  joiningDate: string;
+  monthlyRent: number;
+  nextDueDate: string;
+  stayStatus: string;
+  email: string;
+  phone: string;
+  dob: string;
+  gender: string;
+  profileImageUri: string | null;
+  occupation: string;
+  companyName: string;
+  occupationAddress: string;
+  nativePlace: string;
+  emergencyContact1: string;
+  emergencyContact2: string;
+  companyIdProofUri: string | null;
+};
+
+// Shown for the split second before the resident's record has loaded
+// (instead of someone else's sample data).
+const EMPTY_RESIDENT: ResidentDataType = {
+  name: '',
+  pgName: '',
+  room: '',
+  bed: '',
+  floor: '',
+  joiningDate: '',
+  monthlyRent: 0,
+  nextDueDate: '',
+  stayStatus: 'Active',
+  email: '',
+  phone: '',
+  dob: '',
+  gender: '',
+  profileImageUri: null,
+  occupation: '',
+  companyName: '',
+  occupationAddress: '',
+  nativePlace: '',
+  emergencyContact1: '',
+  emergencyContact2: '',
+  companyIdProofUri: null,
+};
+
+type ResidentContextType = {
+  residentData: ResidentDataType;
+  updateResidentData: (updates: Partial<ResidentDataType>) => void;
+};
+
+const ResidentContext = createContext<ResidentContextType | undefined>(undefined);
+
+function floorLabel(n: number): string {
+  if (n === 0) return 'Ground Floor';
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]} Floor`;
+}
+
+// "Nov 5": this month's due date, or next month's once this month's rent is paid.
+function nextDueLabel(dueDay: number, paidThisMonth: boolean): string {
+  const now = new Date();
+  const monthOffset = paidThisMonth ? 1 : 0;
+  const d = new Date(now.getFullYear(), now.getMonth() + monthOffset, dueDay);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+export function ResidentProvider({ children }: { children: ReactNode }) {
+  const { residents, updateResident, rooms, properties, paymentRecords } = useAdmin();
+  const { residentId } = useMockAuth();
+
+  // A new photo shows straight away from the phone's file while it uploads.
+  const [localImages, setLocalImages] = useState<{ profileImageUri?: string; companyIdProofUri?: string }>({});
+
+  const adminRecord: any = residents.find((r) => r.id === residentId);
+  // Room and property are looked up live from AdminContext, so a room transfer or an
+  // admin's edit shows up here immediately.
+  const adminRoom = adminRecord ? rooms.find((r) => r.id === adminRecord.roomId) : undefined;
+  const adminProperty = adminRecord ? properties.find((p) => p.id === adminRecord.propertyId) : undefined;
+
+  const currentMonthLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const paidThisMonth = paymentRecords.some(
+    (p) => p.residentId === residentId && p.month === currentMonthLabel && p.status === 'Paid'
+  );
+
+  const residentData: ResidentDataType = adminRecord
+    ? {
+        ...EMPTY_RESIDENT,
+        name: adminRecord.name ?? '',
+        phone: adminRecord.phone ?? '',
+        email: adminRecord.email ?? '',
+        gender: adminRecord.gender ?? '',
+        dob: adminRecord.dob ?? '',
+        companyName: adminRecord.companyName ?? '',
+        profileImageUri: localImages.profileImageUri ?? adminRecord.profileImageUri ?? null,
+        occupation: adminRecord.occupation ?? '',
+        occupationAddress: adminRecord.occupationAddress ?? '',
+        nativePlace: adminRecord.nativePlace ?? '',
+        emergencyContact1: adminRecord.emergencyContact1 ?? '',
+        emergencyContact2: adminRecord.emergencyContact2 ?? '',
+        companyIdProofUri: localImages.companyIdProofUri ?? adminRecord.companyIdProofUri ?? null,
+        pgName: adminProperty?.name ?? '',
+        room: adminRoom?.roomNumber ?? '',
+        floor: adminRoom ? floorLabel(adminRoom.floor) : '',
+        // Rooms only have a capacity (e.g. "3 Sharing"), not individual bed codes.
+        bed: adminRoom ? `${adminRoom.capacity} Sharing` : '',
+        joiningDate: adminRecord.joiningDate ?? '',
+        monthlyRent: adminRecord.monthlyRent ?? 0,
+        nextDueDate: nextDueLabel(adminRecord.rentDueDay ?? 5, paidThisMonth),
+        stayStatus: adminRecord.vacatingDate ? 'Notice Given' : 'Active',
+      }
+    : EMPTY_RESIDENT;
+
+  // Photos and files go to Firebase Storage first, then the link is saved on the resident.
+  const saveImage = (
+    key: 'profileImageUri' | 'companyIdProofUri',
+    uri: string | null | undefined,
+    fileName: string
+  ) => {
+    if (!residentId || uri === undefined) return;
+
+    if (!uri || /^https?:/.test(uri)) {
+      updateResident(residentId, { [key]: uri } as any);
+      return;
+    }
+
+    setLocalImages((prev) => ({ ...prev, [key]: uri }));
+    const clear = () =>
+      setLocalImages((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+
+    uploadImage(uri, `profiles/${residentId}/${fileName}-${Date.now()}.jpg`)
+      .then((url) => {
+        updateResident(residentId, { [key]: url } as any);
+        clear();
+      })
+      .catch((e: any) => {
+        console.warn('profile upload failed:', e?.code ?? e?.message);
+        clear();
+        Alert.alert('Upload failed', 'The photo could not be uploaded. Check your internet connection and try again.');
+      });
+  };
+
+  const updateResidentData = (updates: Partial<ResidentDataType>) => {
+    if (!residentId) return;
+
+    // Text fields saved on the resident's record. The phone number is NOT saved here:
+    // it is the resident's login, so only the owner can change it.
+    const textKeys = [
+      'name',
+      'email',
+      'gender',
+      'dob',
+      'companyName',
+      'occupation',
+      'occupationAddress',
+      'nativePlace',
+      'emergencyContact1',
+      'emergencyContact2',
+    ] as const;
+
+    const patch: Record<string, any> = {};
+    textKeys.forEach((k) => {
+      if (updates[k] !== undefined) patch[k] = updates[k];
+    });
+    if (Object.keys(patch).length > 0) updateResident(residentId, patch as any);
+
+    saveImage('profileImageUri', updates.profileImageUri, 'photo');
+    saveImage('companyIdProofUri', updates.companyIdProofUri, 'company-id');
+  };
+
+  return (
+    <ResidentContext.Provider value={{ residentData, updateResidentData }}>
+      {children}
+    </ResidentContext.Provider>
+  );
+}
+
+export function useResident() {
+  const context = useContext(ResidentContext);
+  if (!context) {
+    throw new Error('useResident must be used within a ResidentProvider');
+  }
+  return context;
+}
+
+===== mockData quickActions =====
+
+
+> src\constants\mockData.ts:42:export const quickActions: QuickAction[] = [
+  src\constants\mockData.ts:43:  { id: 'rent', label: 'Rent', icon: 
+'cash-outline' },
+  src\constants\mockData.ts:44:  { id: 'complaints', label: 'Complaints', 
+icon: 'alert-circle-outline' },
+  src\constants\mockData.ts:45:  { id: 'maintenance', label: 'Maintenance', 
+icon: 'construct-outline' },
+  src\constants\mockData.ts:46:  { id: 'food', label: 'Food', icon: 
+'restaurant-outline' },
+  src\constants\mockData.ts:47:  { id: 'notices', label: 'Notices', icon: 
+'megaphone-outline' },
+  src\constants\mockData.ts:48:  { id: 'visitors', label: 'Visitors', icon: 
+'people-outline' },
+  src\constants\mockData.ts:49:  { id: 'nearby', label: 'Nearby', icon: 
+'location-outline' },
+  src\constants\mockData.ts:50:  { id: 'vacate', label: 'Vacate Notice', icon: 
+'exit-outline' },
+  src\constants\mockData.ts:51:  { id: 'laundry', label: 'Laundry', icon: 
+'shirt-outline' },
+  src\constants\mockData.ts:52:];
+  src\constants\mockData.ts:53:
+  src\constants\mockData.ts:54:export type Announcement = {
+  src\constants\mockData.ts:55:  id: string;
+  src\constants\mockData.ts:56:  title: string;
+  src\constants\mockData.ts:57:  description: string;
+  src\constants\mockData.ts:58:  icon: string;
+  src\constants\mockData.ts:59:  date: string;
+  src\constants\mockData.ts:60:  propertyId: string;
+  src\constants\mockData.ts:61:};
+  src\constants\mockData.ts:62:export const announcements: Announcement[] = [
+  src\constants\mockData.ts:63:  {
+  src\constants\mockData.ts:64:    id: '1',
+  src\constants\mockData.ts:65:    title: 'Rent Payment Reminder',
+  src\constants\mockData.ts:66:    description: 'Your September rent is due in 
+4 days. Pay on time to avoid late fees.',
+  src\constants\mockData.ts:67:    date: 'Sep 1',
+  src\constants\mockData.ts:68:    icon: 'cash-outline',
+  src\constants\mockData.ts:69:    propertyId: 'pg1',
+  src\constants\mockData.ts:70:  },
+  src\constants\mockData.ts:71:  {
+  src\constants\mockData.ts:72:    id: '2',
+  src\constants\mockData.ts:73:    title: 'Scheduled Maintenance',
+  src\constants\mockData.ts:74:    description: 'Water supply will be 
+interrupted on 3rd Sep from 10 AM to 1 PM for pipe repair.',
+  src\constants\mockData.ts:75:    date: 'Aug 30',
+  src\constants\mockData.ts:76:    icon: 'construct-outline',
+  src\constants\mockData.ts:77:    propertyId: 'pg1',
+  src\constants\mockData.ts:78:  },
+  src\constants\mockData.ts:79:  {
+  src\constants\mockData.ts:80:    id: '3',
+  src\constants\mockData.ts:81:    title: 'New Mess Menu Available',
+  src\constants\mockData.ts:82:    description: 'Check out the updated weekly 
+mess menu with new dishes added.',
+
+
+

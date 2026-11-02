@@ -1,18 +1,51 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { visitorLogs } from '../../constants/mockData';
 import VisitorCard from '../../components/visitors/VisitorCard';
-import { useVisitors } from '../../context/VisitorsContext';
+import { useVisitors, VisitorRequest } from '../../context/VisitorsContext';
+
+type Filter = 'All' | 'Pending' | 'Approved' | 'Rejected' | 'Inside' | 'Left';
+const FILTERS: Filter[] = ['All', 'Pending', 'Approved', 'Rejected', 'Inside', 'Left'];
+
+const matches = (f: Filter, v: VisitorRequest) => {
+  if (f === 'All') return true;
+  if (f === 'Inside') return v.status === 'Checked In';
+  if (f === 'Left') return v.status === 'Checked Out';
+  return v.status === f;
+};
 
 export default function VisitorsScreen() {
   const navigation = useNavigation<any>();
-const { visitorLogs, checkOutVisitor } = useVisitors();
+  const { visitorLogs, cancelVisitor } = useVisitors();
+  const [filter, setFilter] = useState<Filter>('All');
+
+  const counts = useMemo(() => {
+    const c = {} as Record<Filter, number>;
+    FILTERS.forEach((f) => (c[f] = visitorLogs.filter((v) => matches(f, v)).length));
+    return c;
+  }, [visitorLogs]);
+
+  const shown = useMemo(() => visitorLogs.filter((v) => matches(filter, v)), [visitorLogs, filter]);
+
+  const confirmCancel = (v: VisitorRequest) => {
+    Alert.alert('Cancel Request', `Cancel the visit request for ${v.visitorName}?`, [
+      { text: 'Keep', style: 'cancel' },
+      {
+        text: 'Cancel Request',
+        style: 'destructive',
+        onPress: async () => {
+          const result = await cancelVisitor(v.id);
+          if (!result.ok) Alert.alert('Could Not Cancel', result.message ?? 'Please try again.');
+        },
+      },
+    ]);
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -23,38 +56,54 @@ const { visitorLogs, checkOutVisitor } = useVisitors();
         <View style={{ width: 22 }} />
       </View>
 
-      {visitorLogs.length === 0 ? (
+      <View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+          {FILTERS.map((f) => {
+            const active = f === filter;
+            return (
+              <TouchableOpacity
+                key={f}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setFilter(f)}
+                activeOpacity={0.8}
+              >
+                <Text style={[typography.caption, { color: active ? colors.white : colors.text, fontWeight: '600' }]}>
+                  {f} ({counts[f]})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      {shown.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="people-outline" size={48} color={colors.textMuted} />
-          <Text style={[typography.body, { color: colors.textMuted, marginTop: spacing.sm }]}>
-            No visitor records yet
+          <Text style={[typography.body, { color: colors.textMuted, marginTop: spacing.sm, textAlign: 'center' }]}>
+            {visitorLogs.length === 0
+              ? 'No visitor requests yet.\nTap + to request a visit.'
+              : `No ${filter.toLowerCase()} visitor requests.`}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={visitorLogs}
+          data={shown}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => <VisitorCard visitor={item} onCheckOut={() => checkOutVisitor(item.id)} />}
+          renderItem={({ item }) => <VisitorCard visitor={item} onCancel={() => confirmCancel(item)} />}
           showsVerticalScrollIndicator={false}
         />
       )}
 
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.85}
-        onPress={() => navigation.navigate('NewVisitor')}
-      >
+      <TouchableOpacity style={styles.fab} activeOpacity={0.85} onPress={() => navigation.navigate('NewVisitor')}>
         <Ionicons name="add" size={26} color={colors.white} />
       </TouchableOpacity>
     </SafeAreaView>
   );
 }
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -62,18 +111,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  backButton: {
-    padding: spacing.xs,
+  backButton: { padding: spacing.xs },
+  chipRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm, gap: spacing.xs },
+  chip: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
   },
-  listContent: {
-    padding: spacing.md,
-    paddingBottom: spacing.xl,
-  },
-    emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  listContent: { padding: spacing.md, paddingBottom: 96 },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg },
   fab: {
     position: 'absolute',
     right: spacing.lg,

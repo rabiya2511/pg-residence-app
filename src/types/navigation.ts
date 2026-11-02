@@ -27,6 +27,13 @@ export type RootStackParamList = {
   EditProfile: undefined;
   NearbyPlaces: undefined;
   VacateNotice: undefined;
+  StayDetails: undefined;
+  Settings: undefined;
+  Laundry: undefined;
+  NewLaundry: undefined;
+  Facilities: undefined;
+  Feedback: undefined;
+  Rules: undefined;
   BookRoomForm: { propertyId: string; roomId: string; stayType: 'Monthly' | 'DayGuest' };
   ResidentRegistration: {
     propertyId: string;

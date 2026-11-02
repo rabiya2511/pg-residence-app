@@ -27,6 +27,11 @@ export default function AdminRoomFormScreen() {
   const route = useRoute<any>();
   const { createRoom, updateRoom, rooms, residents, properties, activePropertyId } = useAdmin();
 
+  // Goes back only when there is a screen to go back to (avoids the GO_BACK warning).
+  const goBackSafe = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+  };
+
   const roomId: string | undefined = route.params?.roomId;
   const isEdit = !!roomId;
   const existing = isEdit ? rooms.find((r) => r.id === roomId) : undefined;
@@ -48,12 +53,12 @@ export default function AdminRoomFormScreen() {
   const leave = () => {
     if (saving) return;
     if (!dirty) {
-      navigation.goBack();
+      goBackSafe();
       return;
     }
     Alert.alert('Discard changes?', 'The details you entered will not be saved.', [
       { text: 'Keep Editing', style: 'cancel' },
-      { text: 'Discard', style: 'destructive', onPress: () => navigation.goBack() },
+      { text: 'Discard', style: 'destructive', onPress: goBackSafe },
     ]);
   };
 
@@ -110,8 +115,10 @@ export default function AdminRoomFormScreen() {
     try {
       if (isEdit && existing) {
         updateRoom(existing.id, { floor: v.floorNum, roomNumber: v.number, capacity: v.cap });
-        Alert.alert('Room Updated', 'Changes have been saved.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        Alert.alert('Room Updated', 'Changes have been saved.', [{ text: 'OK', onPress: goBackSafe }]);
       } else {
+        // Debug: shows which property id is being sent (remove once room adding works).
+        console.log('addRoom →', 'propertyId:', propertyId, 'activePropertyId:', activePropertyId);
         const res = await createRoom(propertyId, v.floorNum, v.number, v.cap);
         if (!res.ok) {
           // Keep the form and its input so it can be corrected and retried.
@@ -120,7 +127,7 @@ export default function AdminRoomFormScreen() {
         }
         Alert.alert('Room Added', `Room ${v.number} has been added to ${property?.name ?? 'the property'}.`, [
           { text: 'Add Another', onPress: resetForNext },
-          { text: 'Done', onPress: () => navigation.goBack() },
+          { text: 'Done', onPress: goBackSafe },
         ]);
       }
     } finally {
@@ -132,7 +139,7 @@ export default function AdminRoomFormScreen() {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <TouchableOpacity onPress={goBackSafe} style={styles.backButton}>
             <Ionicons name="arrow-back" size={22} color={colors.text} />
           </TouchableOpacity>
           <Text style={[typography.heading3, { color: colors.text }]}>Add Room</Text>

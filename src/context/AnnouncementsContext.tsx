@@ -1,20 +1,25 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import {
-  getFirestore, collection, doc, onSnapshot, query, where, setDoc, deleteDoc,
+  getFirestore, collection, doc, onSnapshot, query, where, setDoc, deleteDoc, updateDoc,
 } from '@react-native-firebase/firestore';
 import { Announcement } from '../constants/mockData';
 import { useMockAuth } from './MockAuthContext';
 import { useAdmin } from './AdminContext';
 
 // A notice can optionally expire (epoch ms). Expired notices are hidden and the admin session removes them.
-export type NoticeWithExpiry = Announcement & { expiresAt?: number };
+export type NoticeWithExpiry = Announcement & { expiresAt?: number; pinned?: boolean; imageUri?: string };
+
+type NewNotice = Omit<Announcement, 'id' | 'date' | 'propertyId'> & {
+  category?: string;
+  pinned?: boolean;
+  imageUri?: string;
+};
 
 type AnnouncementsContextType = {
   announcements: NoticeWithExpiry[];
-  addAnnouncement: (
-    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'> & { category?: string },
-    options?: { autoClearAfterDays?: number }
-  ) => void;
+  addAnnouncement: (announcement: NewNotice, options?: { autoClearAfterDays?: number }) => void;
+  /** Admin: pin a notice to the top of every resident's list, or unpin it. */
+  setPinned: (id: string, pinned: boolean) => void;
   deleteAnnouncement: (id: string) => void;
   clearAllAnnouncements: () => Promise<void>;
   pendingResidentNotice: Announcement | null;
@@ -61,7 +66,10 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
       q,
       (snap: any) => {
         const rows = snap.docs.map((d: any) => ({ ...d.data(), id: d.id }));
-        rows.sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+        // Pinned notices first, then newest first.
+        rows.sort(
+          (a: any, b: any) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.createdAt ?? 0) - (a.createdAt ?? 0)
+        );
         setList(rows as NoticeWithExpiry[]);
 
         // Admin session: permanently delete notices whose time is up.
@@ -96,10 +104,7 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
     [list, now]
   );
 
-  const addAnnouncement = (
-    announcement: Omit<Announcement, 'id' | 'date' | 'propertyId'> & { category?: string },
-    options?: { autoClearAfterDays?: number }
-  ) => {
+  const addAnnouncement = (announcement: NewNotice, options?: { autoClearAfterDays?: number }) => {
     const propertyId = adminPropertyIds?.[0];
     if (!propertyId) return; // only an admin session can send a notice
 
@@ -118,6 +123,11 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
       console.warn('addAnnouncement:', e?.code)
     );
     setPendingResidentNotice(newAnnouncement); // drives the admin-side delivery popup
+  };
+
+  const setPinned = (id: string, pinned: boolean) => {
+    if (!isAdmin) return;
+    updateDoc(doc(db, 'announcements', id), { pinned }).catch((e: any) => console.warn('setPinned:', e?.code));
   };
 
   const deleteAnnouncement = (id: string) => {
@@ -139,6 +149,7 @@ export function AnnouncementsProvider({ children }: { children: ReactNode }) {
       value={{
         announcements: activeList,
         addAnnouncement,
+        setPinned,
         deleteAnnouncement,
         clearAllAnnouncements,
         pendingResidentNotice,

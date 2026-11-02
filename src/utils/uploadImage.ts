@@ -5,14 +5,14 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 const MAX_CHARS = 350_000;
 
 // "Uploads" an image by shrinking it and returning it as a data link that is stored in Firestore.
-// The path decides how large the picture may be: ID documents need to stay readable,
-// profile photos can be small.
+// The path decides how large the picture may be: ID documents, notice posters and support
+// screenshots need to stay readable, profile photos can be small.
 export async function uploadImage(localUri: string, path: string): Promise<string> {
   // Already a web link or an already-shrunk picture: nothing to do.
   if (/^(https?:|data:)/.test(localUri)) return localUri;
 
-  const isId = path.startsWith('identity/');
-  const widths = isId ? [1000, 800, 640, 480] : [400, 300, 200];
+  const needsDetail = /^(identity|notices|support)\//.test(path);
+  const widths = needsDetail ? [1000, 800, 640, 480] : [400, 300, 200];
 
   try {
     for (const width of widths) {

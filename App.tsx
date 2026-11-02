@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { StatusBar } from 'react-native';
 import { getFirestore, doc, onSnapshot } from '@react-native-firebase/firestore';
 import AppNavigator from './src/navigation/AppNavigator';
 import { registerForNotificationsAsync, scheduleRentReminder } from './src/services/notifications';
@@ -14,21 +15,22 @@ import { DocumentsProvider } from './src/context/DocumentsContext';
 import { ResidentProvider } from './src/context/ResidentContext';
 import { PaymentMethodsProvider } from './src/context/PaymentMethodsContext';
 import { CommunicationsProvider } from './src/context/CommunicationsContext';
-import { StatusBar } from 'react-native';
+import InactivityGuard from './src/components/common/InactivityGuard';
+import { useAppSettings } from './src/utils/appSettings';
 import { colors } from './src/constants/colors';
-   <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-   
+
 function NotificationScheduler() {
   const { rentStatus } = useRent();
+  const { settings } = useAppSettings();
 
   useEffect(() => {
     (async () => {
       const granted = await registerForNotificationsAsync();
-      if (granted) {
+      if (granted && settings.rentReminders) {
         await scheduleRentReminder(rentStatus.dueDate, rentStatus.amount, rentStatus.status === 'Paid');
       }
     })();
-  }, [rentStatus.status]);
+  }, [rentStatus.status, settings.rentReminders]);
 
   return null;
 }
@@ -65,32 +67,37 @@ function DeletedResidentWatcher() {
 
 export default function App() {
   return (
-    <MockAuthProvider>
-      <AdminProvider>
-        <AnnouncementsProvider>
-          <CommunicationsProvider>
-            <ResidentProvider>
-              <ComplaintsProvider>
-                <RentProvider>
-                  <MaintenanceProvider>
-                    <FoodProvider>
-                      <VisitorsProvider>
-                        <DocumentsProvider>
-                          <PaymentMethodsProvider>
-                            <DeletedResidentWatcher />
-                            <NotificationScheduler />
-                            <AppNavigator />
-                          </PaymentMethodsProvider>
-                        </DocumentsProvider>
-                      </VisitorsProvider>
-                    </FoodProvider>
-                  </MaintenanceProvider>
-                </RentProvider>
-              </ComplaintsProvider>
-            </ResidentProvider>
-          </CommunicationsProvider>
-        </AnnouncementsProvider>
-      </AdminProvider>
-    </MockAuthProvider>
+    <>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <MockAuthProvider>
+        <AdminProvider>
+          <AnnouncementsProvider>
+            <CommunicationsProvider>
+              <ResidentProvider>
+                <ComplaintsProvider>
+                  <RentProvider>
+                    <MaintenanceProvider>
+                      <FoodProvider>
+                        <VisitorsProvider>
+                          <DocumentsProvider>
+                            <PaymentMethodsProvider>
+                              <DeletedResidentWatcher />
+                              <NotificationScheduler />
+                              <InactivityGuard>
+                                <AppNavigator />
+                              </InactivityGuard>
+                            </PaymentMethodsProvider>
+                          </DocumentsProvider>
+                        </VisitorsProvider>
+                      </FoodProvider>
+                    </MaintenanceProvider>
+                  </RentProvider>
+                </ComplaintsProvider>
+              </ResidentProvider>
+            </CommunicationsProvider>
+          </AnnouncementsProvider>
+        </AdminProvider>
+      </MockAuthProvider>
+    </>
   );
 }

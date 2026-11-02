@@ -7,6 +7,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
+import { useMockAuth } from '../../context/MockAuthContext';
 import { exportPropertyPdf, exportPropertyExcel } from '../../services/exportPropertyData';
 
 const initialsOf = (name: string) =>
@@ -20,6 +21,10 @@ const initialsOf = (name: string) =>
 export default function AdminPropertiesScreen() {
   const navigation = useNavigation<any>();
   const { properties, deleteProperty, activeProperty, setActiveProperty } = useAdmin();
+  const { logout } = useMockAuth();
+  // Right after login this screen is the first (root) screen: nothing to go back to.
+  // In that mode, choosing a property opens that property's dashboard.
+  const isEntry = !navigation.canGoBack();
   const [query, setQuery] = useState('');
 
   // ----- Export (PDF / Excel) of ONE property's complete data -----
@@ -63,7 +68,22 @@ export default function AdminPropertiesScreen() {
   }, [properties, query]);
 
   const openEdit = (propertyId: string) => navigation.navigate('AdminPropertyForm', { propertyId });
-  const openDashboard = () => navigation.navigate('AdminTabs', { screen: 'Dashboard' });
+  const openDashboard = () =>
+    isEntry
+      ? navigation.replace('AdminTabs', { screen: 'Dashboard' })
+      : navigation.navigate('AdminTabs', { screen: 'Dashboard' });
+
+  // Pick a property (from the login screen) -> make it active -> show its dashboard.
+  const enterProperty = (propertyId: string) => {
+    setActiveProperty(propertyId);
+    openDashboard();
+  };
+
+  const confirmLogout = () =>
+    Alert.alert('Log Out', 'Do you want to log out?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log Out', style: 'destructive', onPress: () => logout() },
+    ]);
 
   const confirmDelete = (propertyId: string, name: string) => {
     Alert.alert(
@@ -89,9 +109,11 @@ export default function AdminPropertiesScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* ---------------- Header ---------------- */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={colors.text} />
-        </TouchableOpacity>
+        {!isEntry && (
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
+          </TouchableOpacity>
+        )}
         <View style={styles.headerIcon}>
           <Ionicons name="business" size={26} color={colors.white} />
         </View>
@@ -106,6 +128,11 @@ export default function AdminPropertiesScreen() {
             {properties.length} {properties.length === 1 ? 'Property' : 'Properties'}
           </Text>
         </View>
+        {isEntry && (
+          <TouchableOpacity onPress={confirmLogout} style={styles.backButton} hitSlop={8}>
+            <Ionicons name="log-out-outline" size={24} color={colors.error} />
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
@@ -146,7 +173,9 @@ export default function AdminPropertiesScreen() {
 
         <View style={styles.listHeader}>
           <Text style={[typography.bodyBold, { color: colors.text }]}>Configured Properties ({filtered.length})</Text>
-          <Text style={[typography.caption, { color: colors.textMuted }]}>Tap card to set as Active</Text>
+          <Text style={[typography.caption, { color: colors.textMuted }]}>
+            {isEntry ? 'Tap a property to open its dashboard' : 'Tap card to set as Active'}
+          </Text>
         </View>
 
         {/* ---------------- Property cards ---------------- */}
@@ -161,7 +190,7 @@ export default function AdminPropertiesScreen() {
               key={property.id}
               style={[styles.card, isActive && styles.cardActive]}
               activeOpacity={0.9}
-              onPress={() => setActiveProperty(property.id)}
+              onPress={() => (isEntry ? enterProperty(property.id) : setActiveProperty(property.id))}
             >
               <View style={styles.cardTop}>
                 {logo ? (
@@ -276,14 +305,18 @@ export default function AdminPropertiesScreen() {
                   style={styles.openButton}
                   activeOpacity={0.85}
                   onPress={() => {
+                    if (isEntry) {
+                      enterProperty(property.id);
+                      return;
+                    }
                     setActiveProperty(property.id);
                     if (isActive) openDashboard();
                   }}
                 >
                   <Text style={[typography.button, { color: colors.white }]}>
-                    {isActive ? 'Active · Open' : 'Set Active'}
+                    {isEntry ? 'Open Dashboard' : isActive ? 'Active · Open' : 'Set Active'}
                   </Text>
-                  {isActive && <Ionicons name="arrow-forward" size={18} color={colors.white} style={{ marginLeft: 6 }} />}
+                  {(isActive || isEntry) && <Ionicons name="arrow-forward" size={18} color={colors.white} style={{ marginLeft: 6 }} />}
                 </TouchableOpacity>
               </View>
             </TouchableOpacity>

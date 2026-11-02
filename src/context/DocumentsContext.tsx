@@ -4,12 +4,16 @@ import {
 } from '@react-native-firebase/firestore';
 import { residentDocuments as documentTemplates, ResidentDocument } from '../constants/mockData';
 import { uploadImage } from '../utils/uploadImage';
+import { uploadFile } from '../utils/uploadFile';
 import { useMockAuth } from './MockAuthContext';
 import { useAdmin } from './AdminContext';
 
+type UploadResult = { ok: boolean; message?: string };
+
 type DocumentsContextType = {
   documents: ResidentDocument[];
-  uploadDocument: (id: string, fileUri: string) => void;
+  /** Uploads (or replaces) one of the resident's own documents. Resolves once it is saved. */
+  uploadDocument: (id: string, fileUri: string, mimeType?: string) => Promise<UploadResult>;
 };
 
 const DocumentsContext = createContext<DocumentsContextType | undefined>(undefined);
@@ -53,32 +57,50 @@ export function DocumentsProvider({ children }: { children: ReactNode }) {
     [saved, localUris]
   );
 
-  const uploadDocument = (id: string, fileUri: string) => {
-    if (!residentId) return;
-    const template = documentTemplates.find((t) => t.id === id);
-    const propertyId = residents.find((r) => r.id === residentId)?.propertyId ?? null;
-    const uploadedOn = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const uploadDocument = async (id: string, fileUri: string, mimeType?: string): Promise<UploadResult> => {
+    if (!residentId) return { ok: false, message: 'You are not signed in.' };
+    const propertyId = residents.find((r) => r.id === residentId)?.propertyId;
+    if (!propertyId) return { ok: false, message: 'Your resident record is still loading. Please try again in a moment.' };
 
-    setLocalUris((prev) => ({ ...prev, [id]: fileUri })); // show it instantly
-    uploadImage(fileUri, `documents/${residentId}/${id}-${Date.now()}`)
-      .then((url) =>
-        setDoc(doc(db, 'residentDocuments', `${residentId}_${id}`), {
-          residentId,
-          propertyId,
-          docTypeId: id,
-          name: template?.name ?? id,
-          status: 'Uploaded',
-          uploadedOn,
-          fileUri: url,
-        })
-      )
-      .catch((e: any) => console.warn('uploadDocument:', e?.code ?? e?.message))
-      .finally(() =>
-        setLocalUris((prev) => {
-          const { [id]: _removed, ...rest } = prev;
-          return rest;
-        })
-      );
+    const template = documentTemplates.find((t) => t.id === id);
+    const isPdf = (mimeType ?? '').includes('pdf') || /\.pdf$/i.test(fileUri);
+    const uploadedOn = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const path = `documents/${residentId}/${id}-${Date.now()}${isPdf ? '.pdf' : ''}`;
+
+    if (!isPdf) setLocalUris((prev) => ({ ...prev, [id]: fileUri })); // show a photo instantly
+    try {
+      const url = await Promise.race([
+        isPdf ? uploadFile(fileUri, path, 'application/pdf') : uploadImage(fileUri, path),
+        new Promise<never>((_, reject) => setTimeout(() => reject({ code: 'timeout' }), 60000)),
+      ]);
+      await setDoc(doc(db, 'residentDocuments', `${residentId}_${id}`), {
+        residentId,
+        propertyId,
+        docTypeId: id,
+        name: template?.name ?? id,
+        status: 'Uploaded',
+        uploadedOn,
+        fileUri: url,
+        mimeType: isPdf ? 'application/pdf' : 'image/jpeg',
+      });
+      return { ok: true };
+    } catch (e: any) {
+      console.warn('uploadDocument:', e?.code ?? e?.message);
+      return {
+        ok: false,
+        message:
+          e?.code === 'timeout'
+            ? 'The upload is taking too long. Check your connection and try again.'
+            : e?.code === 'storage/unauthorized' || e?.code === 'firestore/permission-denied'
+            ? 'You are not allowed to upload this document. Please contact your PG admin.'
+            : 'Could not upload the document. Check your connection and try again.',
+      };
+    } finally {
+      setLocalUris((prev) => {
+        const { [id]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
   };
 
   return (

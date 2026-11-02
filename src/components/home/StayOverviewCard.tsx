@@ -11,6 +11,9 @@ type Props = {
   monthlyRent: number;
   nextDueDate: string;
   stayStatus: string;
+  // Optional, so any other screen that uses this card keeps working unchanged.
+  floor?: string;
+  checkInDate?: string;
 };
 
 export default function StayOverviewCard({
@@ -20,21 +23,28 @@ export default function StayOverviewCard({
   monthlyRent,
   nextDueDate,
   stayStatus,
+  floor,
+  checkInDate,
 }: Props) {
+  // "bed" holds the room's sharing type (e.g. "3 Sharing"), so it is not labelled "Bed".
+  const roomLine = [room ? `Room: ${room}` : '', floor || ''].filter(Boolean).join('  ·  ');
+  const stayLine = [bed || '', checkInDate ? `Check-in: ${checkInDate}` : '']
+    .filter(Boolean)
+    .join('  ·  ');
+
   return (
     <View style={styles.card}>
       <Text style={[typography.caption, styles.label]}>My Stay</Text>
       <Text style={[typography.heading3, { color: colors.white }]}>{pgName}</Text>
-      <Text style={[typography.body, styles.subLabel]}>
-        Room: {room}  ·  Bed: {bed}
-      </Text>
+      {!!roomLine && <Text style={[typography.body, styles.subLabel]}>{roomLine}</Text>}
+      {!!stayLine && <Text style={[typography.body, styles.subLabel]}>{stayLine}</Text>}
 
       <View style={styles.divider} />
 
       <View style={styles.row}>
         <View style={styles.statBlock}>
           <Text style={[typography.caption, styles.label]}>Monthly Rent</Text>
-          <Text style={[typography.heading3, { color: colors.white }]}>₹{monthlyRent}</Text>
+          <Text style={[typography.heading3, { color: colors.white }]}>₹{monthlyRent.toLocaleString('en-IN')}</Text>
         </View>
         <View style={styles.statBlock}>
           <Text style={[typography.caption, styles.label]}>Next Due</Text>

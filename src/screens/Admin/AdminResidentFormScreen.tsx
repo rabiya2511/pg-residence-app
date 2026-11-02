@@ -266,9 +266,8 @@ export default function AdminResidentFormScreen() {
   const [email, setEmail] = useState(existing?.email ?? '');
   const [guardianName, setGuardianName] = useState(existing?.guardianName ?? '');
   const [guardianPhone, setGuardianPhone] = useState(existing?.guardianPhone ?? '');
-  const [permanentAddress, setPermanentAddress] = useState(
-    ((existing as any)?.permanentAddress ?? (existing as any)?.address ?? '').toString()
-  );
+   const [permanentAddress, setPermanentAddress] = useState(existing?.permanentAddress ?? '');
+
   const [gender, setGender] = useState<AdminGender | null>(existing?.gender ?? null);
 
   // ---- Identity & documents ----
@@ -279,6 +278,7 @@ export default function AdminResidentFormScreen() {
   const [officeIdType, setOfficeIdType] = useState(existing?.officeIdType ?? 'Office');
   const [officeIdCode, setOfficeIdCode] = useState(existing?.officeIdCode ?? '');
   const [officeIdUri, setOfficeIdUri] = useState<string | null>(existing?.officeIdUri ?? null);
+   
 
   // ---- Room ----
   const [propertyId, setPropertyId] = useState(existing?.propertyId ?? route.params?.propertyId ?? '');

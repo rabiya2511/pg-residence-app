@@ -23,6 +23,7 @@ import HelpSupportScreen from '../screens/Help/HelpSupportScreen';
 import SupportChatScreen from '../screens/Help/SupportChatScreen';
 import EditProfileScreen from '../screens/Profile/EditProfileScreen';
 import PrivacyScreen from '../screens/Privacy/PrivacyScreen';
+import StayDetailsScreen from '../screens/Stay/StayDetailsScreen';
 import AuthStackNavigator from './AuthStackNavigator';
 import { useMockAuth } from '../context/MockAuthContext';
 import NearbyPlacesScreen from '../screens/NearbyPlaces/NearbyPlacesScreen';
@@ -30,6 +31,12 @@ import BookRoomFormScreen from '../screens/BookRoom/BookRoomFormScreen';
 import VacateNoticeScreen from '../screens/Resident/VacateNoticeScreen';
 import ResidentRegistrationScreen from '../screens/BookRoom/ResidentRegistrationScreen';
 import { colors } from '../constants/colors';
+import SettingsScreen from '../screens/Settings/SettingsScreen';
+import LaundryScreen from '../screens/Laundry/LaundryScreen';
+import NewLaundryScreen from '../screens/Laundry/NewLaundryScreen';
+import FacilitiesScreen from '../screens/Facilities/FacilitiesScreen';
+import FeedbackScreen from '../screens/Feedback/FeedbackScreen';
+import RulesScreen from '../screens/Rules/RulesScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -39,6 +46,7 @@ function ResidentStackNavigator() {
       <Stack.Screen name="MainTabs" component={TabNavigator} />
       <Stack.Screen name="RentDetails" component={RentDetailsScreen} />
       <Stack.Screen name="PayRent" component={PayRentScreen} />
+      <Stack.Screen name="StayDetails" component={StayDetailsScreen} />
       <Stack.Screen name="NearbyPlaces" component={NearbyPlacesScreen} />
       <Stack.Screen name="VacateNotice" component={VacateNoticeScreen} />
       <Stack.Screen
@@ -61,11 +69,18 @@ function ResidentStackNavigator() {
       <Stack.Screen name="EditProfile" component={EditProfileScreen} />
       <Stack.Screen name="Privacy" component={PrivacyScreen} />
       <Stack.Screen name="BookRoomForm" component={BookRoomFormScreen} />
+      <Stack.Screen name="Settings" component={SettingsScreen} />
+      <Stack.Screen name="Laundry" component={LaundryScreen} />
+      <Stack.Screen name="NewLaundry" component={NewLaundryScreen} />
+      <Stack.Screen name="Facilities" component={FacilitiesScreen} />
+      <Stack.Screen name="Feedback" component={FeedbackScreen} />
+      <Stack.Screen name="Rules" component={RulesScreen} />
       <Stack.Screen
         name="ResidentRegistration"
         component={ResidentRegistrationScreen}
         options={{ gestureEnabled: false }}
       />
+   
     </Stack.Navigator>
   );
 }

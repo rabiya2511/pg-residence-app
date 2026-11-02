@@ -4,57 +4,93 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { VisitorLog } from '../../constants/mockData';
+import { VisitorRequest, VisitorStatus } from '../../context/VisitorsContext';
 
-type Props = {
-  visitor: VisitorLog;
-  onCheckOut?: () => void;
+const STATUS_STYLE: Record<VisitorStatus, { label: string; bg: string; fg: string }> = {
+  Pending: { label: 'Pending', bg: colors.amberBg, fg: '#92400E' },
+  Approved: { label: 'Approved', bg: colors.successBg, fg: colors.success },
+  Rejected: { label: 'Rejected', bg: colors.errorBg, fg: colors.error },
+  Cancelled: { label: 'Cancelled', bg: colors.border, fg: colors.textMuted },
+  'Checked In': { label: 'Inside', bg: colors.primaryLight, fg: colors.primary },
+  'Checked Out': { label: 'Left', bg: colors.border, fg: colors.textMuted },
 };
 
-export default function VisitorCard({ visitor, onCheckOut }: Props) {
-  const isCheckedIn = visitor.status === 'Checked In';
+type Props = {
+  visitor: VisitorRequest;
+  onCancel?: () => void;
+};
+
+export default function VisitorCard({ visitor, onCancel }: Props) {
+  const s = STATUS_STYLE[visitor.status] ?? STATUS_STYLE.Pending;
+  const canCancel = visitor.status === 'Pending' || visitor.status === 'Approved';
+
+  const when = [
+    visitor.expectedDate,
+    visitor.expectedArrival
+      ? visitor.expectedDeparture
+        ? `${visitor.expectedArrival} – ${visitor.expectedDeparture}`
+        : visitor.expectedArrival
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <View style={styles.card}>
       <View style={styles.avatarWrap}>
-        <Text style={styles.avatarInitial}>{visitor.visitorName.charAt(0)}</Text>
+        <Text style={styles.avatarInitial}>{(visitor.visitorName || '?').charAt(0).toUpperCase()}</Text>
       </View>
       <View style={styles.content}>
         <View style={styles.headerRow}>
-          <Text style={[typography.bodyBold, { color: colors.text }]}>{visitor.visitorName}</Text>
-          <View
-            style={[
-              styles.badge,
-              { backgroundColor: isCheckedIn ? '#D1FAE5' : colors.background },
-            ]}
-          >
-            <Text
-              style={[
-                typography.caption,
-                { color: isCheckedIn ? colors.success : colors.textMuted },
-              ]}
-            >
-              {visitor.status}
-            </Text>
+          <Text style={[typography.bodyBold, { color: colors.text, flex: 1, marginRight: spacing.sm }]} numberOfLines={1}>
+            {visitor.visitorName}
+          </Text>
+          <View style={[styles.badge, { backgroundColor: s.bg }]}>
+            <Text style={[typography.caption, { color: s.fg, fontWeight: '700' }]}>{s.label}</Text>
           </View>
         </View>
+
         <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
-          {visitor.purpose}
+          {[visitor.relationship, visitor.purpose].filter(Boolean).join(' · ')}
+          {visitor.numVisitors > 1 ? ` · ${visitor.numVisitors} visitors` : ''}
         </Text>
-        <View style={styles.timeRow}>
-          <Ionicons name="time-outline" size={13} color={colors.textMuted} />
-          <Text style={[typography.caption, { color: colors.textMuted, marginLeft: 4 }]}>
-            {visitor.checkInTime}
-            {visitor.checkOutTime ? ` – ${visitor.checkOutTime}` : ' (still inside)'}
+
+        {!!when && (
+          <View style={styles.timeRow}>
+            <Ionicons name="time-outline" size={13} color={colors.textMuted} />
+            <Text style={[typography.caption, { color: colors.textMuted, marginLeft: 4 }]}>{when}</Text>
+          </View>
+        )}
+
+        {!!visitor.visitorPhone && (
+          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+            Phone: {visitor.visitorPhone}
           </Text>
-        </View>
-        <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
-          {visitor.date}
-        </Text>
-        {isCheckedIn && onCheckOut && (
-          <TouchableOpacity style={styles.checkOutButton} onPress={onCheckOut} activeOpacity={0.8}>
-            <Text style={[typography.caption, { color: colors.white, fontWeight: '600' }]}>
-              Check Out
+        )}
+        {!!visitor.instructions && (
+          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+            Note: {visitor.instructions}
+          </Text>
+        )}
+
+        {visitor.status === 'Rejected' && (
+          <View style={styles.rejectBox}>
+            <Text style={[typography.caption, { color: colors.error }]}>
+              {visitor.rejectReason ? `Rejected: ${visitor.rejectReason}` : 'Rejected by the admin.'}
             </Text>
+          </View>
+        )}
+
+        {(visitor.checkInTime || visitor.checkOutTime) && visitor.status !== 'Pending' && (
+          <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>
+            {visitor.checkInTime ? `Entered ${visitor.checkInTime}` : ''}
+            {visitor.checkOutTime ? ` · Left ${visitor.checkOutTime}` : visitor.status === 'Checked In' ? ' · still inside' : ''}
+          </Text>
+        )}
+
+        {canCancel && onCancel && (
+          <TouchableOpacity style={styles.cancelButton} onPress={onCancel} activeOpacity={0.8}>
+            <Text style={[typography.caption, { color: colors.error, fontWeight: '700' }]}>Cancel Request</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -81,35 +117,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: spacing.sm,
   },
-  avatarInitial: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.primary,
+  avatarInitial: { fontSize: 16, fontWeight: '700', color: colors.primary },
+  content: { flex: 1 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  badge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
+  timeRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  rejectBox: {
+    backgroundColor: colors.errorBg,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
   },
-  content: {
-    flex: 1,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  badge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radius.full,
-  },
-  timeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  checkOutButton: {
-    backgroundColor: colors.error,
+  cancelButton: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.error,
     borderRadius: radius.sm,
     paddingVertical: 6,
     paddingHorizontal: spacing.sm,
-    alignSelf: 'flex-start',
     marginTop: spacing.sm,
   },
 });

@@ -195,6 +195,8 @@ type AdminContextType = {
   markComplaintNotificationRead: (notificationId: string) => void;
   markAllComplaintNotificationsRead: () => void;
   updateComplaintStatus: (complaintId: string, status: AdminComplaint['status']) => void;
+  /** The admin's reply on a complaint; the resident sees it on their Complaints screen. */
+  setComplaintComment: (complaintId: string, comment: string) => void;
   markComplaintViewed: (complaintId: string) => void;
   /** Permanently deletes complaints of the active property ('resolved' = only resolved ones). Returns how many were removed. */
   clearComplaints: (mode: 'resolved' | 'all') => Promise<{ ok: boolean; count: number; message?: string }>;
@@ -237,11 +239,13 @@ type AdminContextType = {
   restoreResident: (residentId: string, input?: RestoreResidentInput) => { ok: boolean; message?: string };
   /** Permanent delete: removes the resident (active or archived) and their documents, payments and notifications. */
   permanentlyDeleteResident: (residentId: string) => void;
-  submitVacateNotice: (
+   submitVacateNotice: (
     residentId: string,
     vacatingDate: string | null,
     isEmergency?: boolean,
-    reason?: string | null
+    reason?: string | null,
+    remarks?: string | null,
+    adminInitiated?: boolean
   ) => void;
   setIdentityDocumentUri: (residentId: string, side: 'front' | 'back', uri: string) => void;
   clearIdentityDocumentUri: (residentId: string, side: 'front' | 'back') => void;
@@ -597,6 +601,19 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     'rooms', () => inConstraint('propertyId', roomPropertyIds), roomPropertyIds.join(',')
   ).data;
 
+  // A resident can always read the property they live in (name, address, manager contact),
+  // even when that property is not public.
+  const ownPropsQ = useCollection<Property>(
+    'properties',
+    () => (!adminPropertyIds && ownPropertyId ? where('id', '==', ownPropertyId) : null),
+    ownPropertyId ?? ''
+  );
+  const residentProps = useMemo(() => {
+    const byId = new Map<string, Property>();
+    [...publicProps, ...ownPropsQ.data].forEach((p) => byId.set(p.id, p));
+    return Array.from(byId.values());
+  }, [publicProps, ownPropsQ.data]);
+
   // ───────── Ads: strictly one property ─────────
   // Admin: the property they are working in. Resident: the property they live in.
   // A resident of another property never gets these documents, and the filter below
@@ -919,10 +936,20 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       clean({
         status,
         ...(status === 'In Progress' ? { inProgressOn: today } : {}),
-        ...(status === 'Resolved' ? { resolvedOn: null } : {}),
+             ...(status === 'Resolved' ? { resolvedOn: today } : {}),
         ...(status === 'Open' ? { inProgressOn: null, resolvedOn: null } : {}),
       })
     ).catch(warn('updateComplaintStatus:'));
+  };
+    const setComplaintComment = (complaintId: string, comment: string) => {
+    const text = comment.trim();
+    updateDoc(
+      doc(db, 'complaints', complaintId),
+      clean({
+        adminComment: text || null,
+        adminCommentOn: text ? formatDisplayDate(new Date()) : null,
+      })
+    ).catch(warn('setComplaintComment:'));
   };
 
   const markComplaintViewed = (complaintId: string) => {
@@ -1316,6 +1343,15 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         vacateReason: null,
         emergencyVacateDeductionPercent: null,
         roomHistory: [...previousHistory, newEntry],
+                exitHistory: [
+          ...((archived as any).exitHistory ?? []),
+          ...((archived as any).exitSettlement ? [(archived as any).exitSettlement] : []),
+        ],
+        exitSettlement: null,
+        exitDecision: null,
+        exitDraft: null,
+        vacateRemarks: null,
+        vacateSubmittedAt: null,
       })
     ).catch(warn('restoreResident:'));
     setDoc(doc(db, 'identityDocuments', residentId), { residentId, propertyId: targetPropertyId }, { merge: true })
@@ -1340,8 +1376,16 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     residentId: string,
     vacatingDate: string | null,
     isEmergency: boolean = false,
-    reason: string | null = null
+    reason: string | null = null,
+    remarks: string | null = null,
+    adminInitiated: boolean = false
   ) => {
+        // One exit notice per stay: a second notice is ignored while one is already open.
+    const existingNotice = rawResidents.find((r) => r.id === residentId);
+    if (vacatingDate && existingNotice?.vacatingDate) {
+      console.warn('submitVacateNotice: this resident already has an exit notice');
+      return;
+    }
     // Remove reminders left over from an earlier vacating date or a cancelled notice.
     const oldReminders = notifQ.data.filter(
       (n) => n.kind === 'vacate' && n.reminder && n.residentId === residentId
@@ -1369,12 +1413,19 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       }
     }
 
+       const submittedAt = Date.now();
     updateDoc(doc(db, 'residents', residentId), {
       vacatingDate,
       vacateReason: vacatingDate ? reason : null,
       emergencyVacateDeductionPercent: vacatingDate ? deductionPercent : null,
+      vacateRemarks: vacatingDate ? remarks : null,
+      vacateSubmittedAt: vacatingDate ? submittedAt : null,
+      // A vacate the admin records themselves needs no separate approval.
+      ...(vacatingDate && adminInitiated
+        ? { exitDecision: { status: 'Approved', for: submittedAt, at: submittedAt, auto: true } }
+        : {}),
     }).catch(warn('submitVacateNotice:'));
-
+    
     if (vacatingDate && resident) {
       pushNotification(
         'vacate',
@@ -1943,7 +1994,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         paymentNotifications,
         vacateNotifications,
         complaintNotifications,
-        properties: isAdminSession ? adminProps : publicProps,
+        properties: isAdminSession ? adminProps : residentProps,
         publicProperties: publicProps,
         activePropertyId: activeId,
         activeProperty: adminProps.find((p) => p.id === activeId),
@@ -1961,6 +2012,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         markComplaintNotificationRead,
         markAllComplaintNotificationsRead,
         updateComplaintStatus,
+        setComplaintComment,
         markComplaintViewed,
         clearComplaints,
         clearRevenueData,

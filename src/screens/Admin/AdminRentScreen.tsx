@@ -40,6 +40,7 @@ function RentRow({
   roomNumber,
   deduction,
   deductionReason,
+  paidAmount,
   hideRoom,
   onMarkPaid,
   onDeduction,
@@ -48,12 +49,17 @@ function RentRow({
   roomNumber: string | undefined;
   deduction: number;
   deductionReason?: string | null;
+  /** Amount actually collected when this month's rent is already paid (already after the deduction). */
+  paidAmount?: number | null;
   hideRoom?: boolean;
   onMarkPaid: () => void;
   onDeduction: () => void;
 }) {
   const statusStyle = statusColors[resident.rentStatus] ?? statusColors.Pending;
-  const net = Math.max(0, resident.monthlyRent - deduction);
+  const isPaidRow = paidAmount != null;
+  // A paid record already holds the amount after the deduction, so it is not deducted a second time.
+  const net = isPaidRow ? paidAmount! : Math.max(0, resident.monthlyRent - deduction);
+  const gross = isPaidRow ? paidAmount! + deduction : resident.monthlyRent;
   return (
     <View style={styles.card}>
       <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={40} />
@@ -65,9 +71,11 @@ function RentRow({
         {!hideRoom && (
           <Text style={[typography.caption, { color: colors.textMuted }]}>Room {roomNumber ?? '—'}</Text>
         )}
+        {(!isPaidRow || deduction > 0) && (
         <TouchableOpacity
           style={[styles.deductionBtn, deduction > 0 && styles.deductionBtnOn]}
           activeOpacity={0.8}
+          disabled={isPaidRow}
           onPress={onDeduction}
         >
           <Ionicons
@@ -84,6 +92,7 @@ function RentRow({
             {deduction > 0 ? `Deduction ${money(deduction)}` : 'Add Deduction'}
           </Text>
         </TouchableOpacity>
+        )}
         {!!deductionReason && deduction > 0 && (
           <View style={styles.noteRow}>
             <Ionicons name="document-text-outline" size={13} color={colors.textMuted} />
@@ -97,7 +106,7 @@ function RentRow({
         <Text style={[typography.heading3, { color: colors.text }]}>{money(net)}</Text>
         {deduction > 0 && (
           <Text style={[typography.caption, { color: colors.textMuted }]}>
-            <Text style={{ textDecorationLine: 'line-through' }}>{money(resident.monthlyRent)}</Text>
+            <Text style={{ textDecorationLine: 'line-through' }}>{money(gross)}</Text>
             {`  −${money(deduction)}`}
           </Text>
         )}
@@ -259,6 +268,11 @@ export default function AdminRentScreen() {
       roomNumber={rooms.find((r) => r.id === item.roomId)?.roomNumber}
       deduction={deductionOf(item)}
       deductionReason={(recordOf.get(item.id) as any)?.deductionReason}
+      paidAmount={
+        item.rentStatus === 'Paid' && recordOf.get(item.id)?.status === 'Paid'
+          ? Number(recordOf.get(item.id)?.amount) || 0
+          : null
+      }
       hideRoom={hideRoom}
       onMarkPaid={() => handleMarkPaid(item)}
       onDeduction={() => openDeduction(item)}

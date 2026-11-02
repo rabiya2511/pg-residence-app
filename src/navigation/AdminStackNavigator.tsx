@@ -29,12 +29,20 @@ import AdminReportDetailScreen from '../screens/Admin/AdminReportsDetailsScreen'
 import AdminCommunicationsScreen from '../screens/Admin/AdminCommunicationsScreen';
 import AdminPendingDuesScreen from '../screens/Admin/AdminPendingDuesScreen';
 import AdminAnalyticsScreen from '../screens/Admin/AdminAnalyticsScreen';
-import AdminAdsScreen from '../screens/Admin/AdminAdsScreen';
+import AdminVisitorsScreen from '../screens/Admin/AdminVisitorsScreen';
+import AdminFoodMenuScreen from '../screens/Admin/AdminFoodMenuScreen';
+import AdminSupportScreen from '../screens/Admin/AdminSupportScreen';
+import AdminLaundryScreen from '../screens/Admin/AdminLaundryScreen';
+import AdminFacilitiesScreen from '../screens/Admin/AdminFacilitiesScreen';
+import AdminFeedbackScreen from '../screens/Admin/AdminFeedbackScreen';
+import AdminRulesScreen from '../screens/Admin/AdminRulesScreen';
+import AdminIssuedDocumentsScreen from '../screens/Admin/AdminIssuedDocumentsScreen';
+import AdminExitLogScreen from '../screens/Admin/AdminCheckoutHistoryScreen';
 
 const Stack = createNativeStackNavigator();
 export default function AdminStackNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator initialRouteName="AdminProperties" screenOptions={{ headerShown: false }}>
       <Stack.Screen name="AdminTabs" component={AdminTabNavigator} />
       <Stack.Screen name="AdminResidentDetail" component={AdminResidentDetailScreen} />
       <Stack.Screen name="AdminResidentFullDetails" component={AdminResidentFullDetailsScreen} />
@@ -64,7 +72,15 @@ export default function AdminStackNavigator() {
       <Stack.Screen name="AdminCommunications" component={AdminCommunicationsScreen} />
       <Stack.Screen name="AdminPendingDues" component={AdminPendingDuesScreen} />
       <Stack.Screen name="AdminAnalytics" component={AdminAnalyticsScreen} />
-      <Stack.Screen name="AdminAds" component={AdminAdsScreen} />
+      <Stack.Screen name="AdminVisitors" component={AdminVisitorsScreen} />
+      <Stack.Screen name="AdminFoodMenu" component={AdminFoodMenuScreen} />
+      <Stack.Screen name="AdminSupport" component={AdminSupportScreen} />
+      <Stack.Screen name="AdminLaundry" component={AdminLaundryScreen} />
+      <Stack.Screen name="AdminFacilities" component={AdminFacilitiesScreen} />
+      <Stack.Screen name="AdminFeedback" component={AdminFeedbackScreen} />
+      <Stack.Screen name="AdminRules" component={AdminRulesScreen} />
+      <Stack.Screen name="AdminIssuedDocuments" component={AdminIssuedDocumentsScreen} />
+      <Stack.Screen name="AdminCheckoutHistory" component={AdminExitLogScreen} />
     </Stack.Navigator>
   );
 }

@@ -13,6 +13,10 @@ import { REPORTS } from './AdminReportsScreen';
 import { computeDues } from '../../utils/dues';
 import { useAdmin, isDailyGuestActiveNow, isPreBookedNow, isAdLiveNow } from '../../context/AdminContext';
 import { todayDayRevenue } from '../../utils/dayRevenue';
+import { useAdminVisitors } from '../../hooks/useAdminVisitors';
+import { useAdminSupport } from '../../hooks/useAdminSupport';
+import { useAdminLaundry } from '../../hooks/useLaundry';
+import { useAdminFeedback } from '../../hooks/useFeedback';
 
 // Name of the Room & Bed Management screen in your navigator.
 const ROOMS_ROUTE = 'AdminRooms';
@@ -74,6 +78,13 @@ export default function AdminDashboardScreen() {
     activeProperty,
     setActiveProperty,
   } = useAdmin();
+  // Visitor requests still waiting for the admin's decision (active property only).
+  const { pendingVisitors } = useAdminVisitors();
+  const { newRequests: newLaundry } = useAdminLaundry();
+  // Support tickets still waiting for a first response.
+  const { openCount: openSupportTickets } = useAdminSupport();
+  // Feedback not yet reviewed.
+  const { newCount: newFeedback } = useAdminFeedback();
   const [qrModalVisible, setQrModalVisible] = useState(false);
   const [switchVisible, setSwitchVisible] = useState(false);
 
@@ -99,7 +110,9 @@ export default function AdminDashboardScreen() {
 
   const unreadNotificationCount =
     paymentNotifications.filter((n) => !n.read).length +
-    vacateNotifications.filter((n) => !n.read).length;
+    vacateNotifications.filter((n) => !n.read).length +
+    pendingVisitors.length +
+    newLaundry.length;
 
   const totalBeds = rooms.reduce((sum, r) => sum + r.capacity, 0);
   const roomIds = new Set(rooms.map((r) => r.id));
@@ -152,6 +165,7 @@ export default function AdminDashboardScreen() {
       sub: `${n.type ?? 'Rent'} · ${n.month}`,
       createdAt: n.createdAt,
       read: n.read,
+      route: 'AdminPaymentNotifications',
     })),
     ...vacateNotifications.map((n) => ({
       id: n.id,
@@ -161,6 +175,27 @@ export default function AdminDashboardScreen() {
       sub: `Vacating ${n.vacatingDate}${n.isEmergency ? ' · Emergency' : ''}`,
       createdAt: n.createdAt,
       read: n.read,
+      route: 'AdminPaymentNotifications',
+    })),
+    ...pendingVisitors.map((v: any) => ({
+      id: `vis_${v.id}`,
+      icon: 'people-outline' as const,
+      color: colors.primary,
+      title: `${v.residentName || 'A resident'} requested a visitor`,
+      sub: `${v.visitorName} · ${v.visitDate ?? v.expectedDate ?? ''}${(v.expectedTime ?? v.expectedArrival) ? ` ${v.expectedTime ?? v.expectedArrival}` : ''}`,
+      createdAt: v.createdAt ?? 0,
+      read: false,
+      route: 'AdminVisitors',
+    })),
+    ...newLaundry.map((l) => ({
+      id: `lau_${l.id}`,
+      icon: 'shirt-outline' as const,
+      color: colors.primary,
+      title: `${l.residentName} requested laundry`,
+      sub: `${l.serviceType} · ${l.pickupDate}`,
+      createdAt: l.createdAt,
+      read: false,
+      route: 'AdminLaundry',
     })),
   ].sort((a, b) => b.createdAt - a.createdAt);
 
@@ -213,6 +248,14 @@ export default function AdminDashboardScreen() {
     { label: 'Room Allocation', value: `${occupiedBeds}/${totalBeds}`, icon: 'bed-outline', color: colors.primary, onPress: () => navigation.navigate(ROOMS_ROUTE) },
     { label: 'Reports', value: REPORTS.length, icon: 'bar-chart-outline', color: colors.primary, onPress: () => navigation.navigate('AdminReports') },
     { label: 'Messages', value: 'Open', icon: 'chatbubbles-outline', color: colors.primary, onPress: () => navigation.navigate('AdminCommunications') },
+    { label: 'Visitor Requests', value: pendingVisitors.length, icon: 'people-outline', color: colors.primary, onPress: () => navigation.navigate('AdminVisitors') },
+    { label: 'Food Menu', value: 'Edit', icon: 'restaurant-outline', color: colors.warning, onPress: () => navigation.navigate('AdminFoodMenu') },
+    { label: 'Support Tickets', value: openSupportTickets, icon: 'help-buoy-outline', color: colors.error, onPress: () => navigation.navigate('AdminSupport') },
+    { label: 'Laundry', value: newLaundry.length, icon: 'shirt-outline', color: colors.primary, onPress: () => navigation.navigate('AdminLaundry') },
+    { label: 'Facilities', value: 'Edit', icon: 'business-outline', color: colors.primary, onPress: () => navigation.navigate('AdminFacilities') },
+    { label: 'Feedback', value: newFeedback, icon: 'star-outline', color: colors.warning, onPress: () => navigation.navigate('AdminFeedback') },
+    { label: 'Rules', value: 'Edit', icon: 'book-outline', color: colors.primary, onPress: () => navigation.navigate('AdminRules') },
+    { label: 'Issue Documents', value: '', icon: 'document-attach-outline', color: colors.primary, onPress: () => navigation.navigate('AdminIssuedDocuments') },
   ];
 
   const quickActions = [
@@ -256,7 +299,23 @@ export default function AdminDashboardScreen() {
           <TouchableOpacity onPress={() => setQrModalVisible(true)} style={styles.headerIconButton}>
             <Ionicons name="qr-code-outline" size={22} color={colors.primary} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.bellButton} onPress={() => navigation.navigate('AdminPaymentNotifications')}>
+          <TouchableOpacity
+            style={styles.bellButton}
+           onPress={() => {
+          const otherUnread =
+            paymentNotifications.filter((n) => !n.read).length +
+            vacateNotifications.filter((n) => !n.read).length;
+          navigation.navigate(
+            otherUnread > 0
+              ? 'AdminPaymentNotifications'
+              : pendingVisitors.length > 0
+              ? 'AdminVisitors'
+              : newLaundry.length > 0
+              ? 'AdminLaundry'
+              : 'AdminPaymentNotifications'
+          );
+        }}
+          >
             <Ionicons name="notifications-outline" size={24} color={colors.text} />
             {unreadNotificationCount > 0 && (
               <View style={styles.bellBadge}>
@@ -536,7 +595,7 @@ export default function AdminDashboardScreen() {
                 key={a.id}
                 style={styles.activityRow}
                 activeOpacity={0.8}
-                onPress={() => navigation.navigate('AdminPaymentNotifications')}
+                onPress={() => navigation.navigate(a.route)}
               >
                 <View style={[styles.miniIcon, { backgroundColor: `${a.color}20` }]}>
                   <Ionicons name={a.icon} size={16} color={a.color} />
