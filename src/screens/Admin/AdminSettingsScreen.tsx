@@ -11,6 +11,7 @@ import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
 import { useAdmin } from '../../context/AdminContext';
 import { updateSettings, useAppSettings } from '../../utils/appSettings';
+import LinkedAccountsCard from '../../components/common/LinkedAccountsCard';
 
 const TIMEOUTS = [
   { label: 'Never', minutes: 0 },
@@ -127,7 +128,17 @@ export default function AdminSettingsScreen() {
           You sign in with a one-time code sent to your mobile number, so there is no password to change or reset.
           The security settings above apply to this phone.
         </Text>
+                <Text style={styles.note}>
+          You sign in with a one-time code sent to your mobile number, so there is no password to change or reset.
+          The security settings above apply to this phone.
+        </Text>
 
+        <Text style={styles.section}>SIGN-IN OPTIONS</Text>
+        <LinkedAccountsCard />
+
+        <TouchableOpacity style={styles.logout} onPress={confirmLogout} activeOpacity={0.85}>
+            
+        </TouchableOpacity>
         <TouchableOpacity style={styles.logout} onPress={confirmLogout} activeOpacity={0.85}>
           <Ionicons name="log-out-outline" size={20} color={colors.error} />
           <Text style={[typography.bodyBold, { color: colors.error, marginLeft: spacing.sm }]}>Log out</Text>

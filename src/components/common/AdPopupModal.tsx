@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Image, TouchableOpacity, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  Image,
+  TouchableOpacity,
+  Pressable,
+  useWindowDimensions,
+  ScrollView,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
@@ -11,6 +21,11 @@ export type PopupAd = { id: string; note: string; imageUrl: string | null };
 /**
  * The pop-up card. Used by the resident dashboard (real ads) and by the
  * admin "Preview" button (the draft ad).
+ *
+ * The card is a fixed block: 60% of the screen height, about 92% of the width. The WHOLE photo is
+ * shown (never cropped); a blurred copy of the photo fills any space around it. The note sits in a
+ * strip at the bottom of the card. There is no button: the X (or a tap outside the card) closes
+ * it, and with several ads, tapping the card shows the next one.
  */
 export default function AdPopupModal({
   visible,
@@ -21,6 +36,7 @@ export default function AdPopupModal({
   ads: PopupAd[];
   onClose: () => void;
 }) {
+  const { width, height } = useWindowDimensions();
   const [index, setIndex] = useState(0);
   const [failed, setFailed] = useState<Record<string, boolean>>({});
 
@@ -31,48 +47,81 @@ export default function AdPopupModal({
   const ad = ads[Math.min(index, ads.length - 1)];
   if (!ad) return null;
 
-  const isLast = index >= ads.length - 1;
+  const hasMore = index < ads.length - 1;
   const showImage = !!ad.imageUrl && !failed[ad.id];
+  const note = ad.note.trim();
+
+  const cardW = Math.min(width * 0.92, 520);
+  const cardH = height * 0.6;
+  const noteH = showImage && note ? Math.min(96, cardH * 0.22) : 0;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <View style={styles.card}>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={18} color={colors.white} />
-          </TouchableOpacity>
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      {/* Tap outside the card to close */}
+      <Pressable style={styles.overlay} onPress={onClose}>
+        {/* Tap the card: next ad (when there is one). Taps here never reach the overlay. */}
+        <Pressable
+          style={[styles.card, { width: cardW, height: cardH }]}
+          onPress={() => hasMore && setIndex((i) => i + 1)}
+        >
+          {showImage ? (
+            <>
+              <View style={{ width: cardW, height: cardH - noteH }}>
+                {/* Blurred copy fills the whole block */}
+                <Image
+                  source={{ uri: ad.imageUrl as string }}
+                  style={StyleSheet.absoluteFill}
+                  resizeMode="cover"
+                  blurRadius={25}
+                />
+                <View style={[StyleSheet.absoluteFill, styles.blurShade]} />
+                {/* The whole, sharp photo on top */}
+                <Image
+                  source={{ uri: ad.imageUrl as string }}
+                  style={StyleSheet.absoluteFill}
+                  resizeMode="contain"
+                  onError={() => setFailed((prev) => ({ ...prev, [ad.id]: true }))}
+                />
+              </View>
 
-          {showImage && (
-            <Image
-              source={{ uri: ad.imageUrl as string }}
-              style={styles.image}
-              resizeMode="contain"
-              onError={() => setFailed((prev) => ({ ...prev, [ad.id]: true }))}
-            />
+              {!!note && (
+                <View style={[styles.noteStrip, { height: noteH }]}>
+                  <ScrollView contentContainerStyle={styles.noteContent} showsVerticalScrollIndicator={false}>
+                    <Text style={[typography.body, styles.noteText]}>{note}</Text>
+                  </ScrollView>
+                </View>
+              )}
+            </>
+          ) : (
+            /* Text-only ad (or photo that could not load): large note on a coloured block */
+            <View style={styles.textOnly}>
+              <ScrollView contentContainerStyle={styles.textOnlyContent} showsVerticalScrollIndicator={false}>
+                <Ionicons name="megaphone" size={44} color="rgba(255,255,255,0.9)" />
+                <Text style={[typography.heading2, styles.textOnlyNote]}>{note || ' '}</Text>
+              </ScrollView>
+            </View>
           )}
 
-          {!!ad.note.trim() && (
-            <ScrollView style={styles.noteScroll} contentContainerStyle={{ padding: spacing.md }}>
-              <Text style={[typography.body, { color: colors.text, textAlign: 'center' }]}>{ad.note}</Text>
-            </ScrollView>
-          )}
-
-          <View style={styles.footer}>
-            {ads.length > 1 && (
-              <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.xs }]}>
+          {/* Several ads: "1 of 3 · tap for next" */}
+          {ads.length > 1 && (
+            <View style={styles.counter}>
+              <Text style={[typography.caption, { color: colors.white, fontWeight: '700' }]}>
                 {index + 1} of {ads.length}
+                {hasMore ? ' · tap for next' : ''}
               </Text>
-            )}
-            <TouchableOpacity
-              style={styles.primaryButton}
-              activeOpacity={0.85}
-              onPress={() => (isLast ? onClose() : setIndex((i) => i + 1))}
-            >
-              <Text style={[typography.button, { color: colors.white }]}>{isLast ? 'Got it' : 'Next'}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={onClose}
+            activeOpacity={0.8}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="close" size={22} color={colors.white} />
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
@@ -116,39 +165,50 @@ export function ResidentAdPopup() {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: spacing.lg,
   },
   card: {
-    width: '100%',
-    maxWidth: 360,
-    maxHeight: '85%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    borderRadius: radius.lg,
     overflow: 'hidden',
   },
+  blurShade: { backgroundColor: 'rgba(0,0,0,0.25)' },
   closeButton: {
     position: 'absolute',
     top: spacing.sm,
     right: spacing.sm,
-    zIndex: 2,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    zIndex: 3,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  image: { width: '100%', height: 260, backgroundColor: colors.background },
-  noteScroll: { maxHeight: 180 },
-  footer: { padding: spacing.md, paddingTop: spacing.sm, alignItems: 'center' },
-  primaryButton: {
-    alignSelf: 'stretch',
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
+  counter: {
+    position: 'absolute',
+    top: spacing.sm + 6,
+    left: spacing.sm,
+    zIndex: 3,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
   },
+  noteStrip: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.md,
+  },
+  noteContent: { flexGrow: 1, justifyContent: 'center', paddingVertical: spacing.sm },
+  noteText: { color: colors.white, textAlign: 'center', fontSize: 16, lineHeight: 22 },
+  textOnly: { flex: 1, backgroundColor: colors.primary },
+  textOnlyContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  textOnlyNote: { color: colors.white, textAlign: 'center', marginTop: spacing.md },
 });

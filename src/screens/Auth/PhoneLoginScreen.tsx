@@ -17,13 +17,14 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
+import { signInWithSocial, SocialProvider } from '../../services/socialAuth';
 
 // Demo logins: these are the test phone numbers saved in Firebase Console
 // (Authentication > Sign-in method > Phone > Phone numbers for testing).
 // Tapping one signs in through the normal Firebase phone login, so the real data loads.
 // Set SHOW_DEMO_LOGINS to false before you give the app to real users:
 // the demo buttons sign in to real accounts of your Firebase project.
-const SHOW_DEMO_LOGINS = true;
+const SHOW_DEMO_LOGINS = false;
 const DEMO_OTP = '123456';
 const DEMO_LOGINS = [
   { label: 'Demo Admin', phone: '98765 43210', icon: 'business-outline' },
@@ -32,10 +33,11 @@ const DEMO_LOGINS = [
 
 export default function PhoneLoginScreen() {
   const navigation = useNavigation<any>();
-  const { requestOtp, verifyOtp, loginWithGoogle, authError } = useMockAuth();
+  const { requestOtp, verifyOtp, authError } = useMockAuth();
   const [phone, setPhone] = useState('');
   const [sending, setSending] = useState(false);
   const [demoBusy, setDemoBusy] = useState<string | null>(null);
+  const [socialBusy, setSocialBusy] = useState<SocialProvider | null>(null);
 
   const handleSendOtp = async () => {
     if (phone.trim().replace(/[^\d]/g, '').length < 10) {
@@ -64,7 +66,15 @@ export default function PhoneLoginScreen() {
     }
   };
 
-  const busy = sending || demoBusy !== null;
+   const handleSocial = async (provider: SocialProvider) => {
+    setSocialBusy(provider);
+    const res = await signInWithSocial(provider);
+    setSocialBusy(null);
+    // On success the app switches to the right dashboard by itself.
+    if (!res.ok && !res.cancelled) Alert.alert('Not signed in', res.message);
+  };
+
+  const busy = sending || demoBusy !== null || socialBusy !== null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -113,12 +123,45 @@ export default function PhoneLoginScreen() {
           </View>
 
           {/* Real Google sign-in is added in a later step; for now this just explains that. */}
-          <TouchableOpacity style={styles.googleButton} activeOpacity={0.85} onPress={loginWithGoogle} disabled={busy}>
-            <Ionicons name="logo-google" size={20} color={colors.text} />
-            <Text style={[typography.button, { color: colors.text, marginLeft: spacing.sm }]}>
-              Continue with Google
-            </Text>
+                 <TouchableOpacity
+            style={[styles.googleButton, busy && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+            onPress={() => handleSocial('google')}
+            disabled={busy}
+          >
+            {socialBusy === 'google' ? (
+              <ActivityIndicator color={colors.text} />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={20} color={colors.text} />
+                <Text style={[typography.button, { color: colors.text, marginLeft: spacing.sm }]}>
+                  Continue with Google
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.googleButton, { marginTop: spacing.sm }, busy && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+            onPress={() => handleSocial('facebook')}
+            disabled={busy}
+          >
+            {socialBusy === 'facebook' ? (
+              <ActivityIndicator color="#1877F2" />
+            ) : (
+              <>
+                <Ionicons name="logo-facebook" size={20} color="#1877F2" />
+                <Text style={[typography.button, { color: colors.text, marginLeft: spacing.sm }]}>
+                  Continue with Facebook
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <Text style={[typography.caption, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.sm }]}>
+            Google and Facebook work after you link them once in Settings.
+          </Text>
 
           {SHOW_DEMO_LOGINS && (
             <View style={styles.demoBox}>

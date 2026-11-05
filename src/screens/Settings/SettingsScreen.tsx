@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Platform } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
@@ -11,6 +11,12 @@ import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
 import { useAdmin } from '../../context/AdminContext';
 import { updateSettings, useAppSettings } from '../../utils/appSettings';
+import { getAuth } from '@react-native-firebase/auth';
+import { linkSocial, unlinkSocial, isLinked } from '../../services/socialAuth';
+
+// Email of the Google account linked to the signed-in user (empty when none is linked).
+const googleEmail = (): string =>
+  (getAuth().currentUser?.providerData ?? []).find((p) => p.providerId === 'google.com')?.email ?? '';
 
 const TIMEOUTS = [
   { label: 'Never', minutes: 0 },
@@ -27,6 +33,39 @@ export default function SettingsScreen() {
   const { settings, update } = useAppSettings();
 
   const me: any = residents.find((r) => r.id === residentId);
+
+  const [googleLinked, setGoogleLinked] = useState(isLinked('google'));
+  const [googleBusy, setGoogleBusy] = useState(false);
+
+  const toggleGoogle = async () => {
+    if (googleBusy) return;
+    if (googleLinked) {
+      Alert.alert('Unlink Google', 'You will still sign in with your phone number. Unlink this Google account?', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: async () => {
+            setGoogleBusy(true);
+            const res = await unlinkSocial('google');
+            setGoogleBusy(false);
+            if (res.ok) setGoogleLinked(false);
+            else Alert.alert('Not unlinked', res.message);
+          },
+        },
+      ]);
+      return;
+    }
+    setGoogleBusy(true);
+    const res = await linkSocial('google');
+    setGoogleBusy(false);
+    if (res.ok) {
+      setGoogleLinked(true);
+      Alert.alert('Google linked', 'You can now sign in with Continue with Google.');
+    } else if (!res.cancelled) {
+      Alert.alert('Not linked', res.message);
+    }
+  };
 
   const toggleRent = (on: boolean) => {
     update({ rentReminders: on });
@@ -92,6 +131,26 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <Row icon="create-outline" title="Edit profile" onPress={() => navigation.navigate('EditProfile')} />
         </View>
+
+        <Text style={styles.section}>LINKED ACCOUNTS</Text>
+        <View style={styles.card}>
+          <Row
+            icon="logo-google"
+            title="Google"
+            sub={googleLinked ? googleEmail() || 'Linked' : 'Link your own Gmail to sign in with Google'}
+            onPress={toggleGoogle}
+            right={
+              googleBusy ? (
+                <ActivityIndicator color={colors.primary} />
+              ) : (
+                <Text style={[typography.caption, { color: googleLinked ? colors.error : colors.primary, fontWeight: '700' }]}>
+                  {googleLinked ? 'Unlink' : 'Link'}
+                </Text>
+              )
+            }
+          />
+        </View>
+        <Text style={styles.note}>Your phone number always stays as your main login. Google is an extra way to sign in.</Text>
 
         <Text style={styles.section}>NOTIFICATIONS</Text>
         <View style={styles.card}>

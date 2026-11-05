@@ -40,6 +40,7 @@ import AdminIssuedDocumentsScreen from '../screens/Admin/AdminIssuedDocumentsScr
 import AdminExitLogScreen from '../screens/Admin/AdminCheckoutHistoryScreen';
 import AdminPaymentVerificationScreen from '../screens/Admin/AdminPaymentVerificationScreen';
 import AdminSettingsScreen from '../screens/Admin/AdminSettingsScreen';
+import AdminAdsScreen from '../screens/Admin/AdminAdsScreen';
 
 const Stack = createNativeStackNavigator();
 export default function AdminStackNavigator() {
@@ -85,6 +86,7 @@ export default function AdminStackNavigator() {
       <Stack.Screen name="AdminCheckoutHistory" component={AdminExitLogScreen} />
       <Stack.Screen name="AdminPaymentVerification" component={AdminPaymentVerificationScreen} />
       <Stack.Screen name="AdminSettings" component={AdminSettingsScreen} />
+      <Stack.Screen name="AdminAds" component={AdminAdsScreen} />
         </Stack.Navigator>
   );
 }

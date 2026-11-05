@@ -661,7 +661,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingVertical: spacing.md,
   },
-
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',

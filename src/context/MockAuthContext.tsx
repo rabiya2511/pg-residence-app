@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 import { getAuth, onAuthStateChanged, signInWithPhoneNumber, signOut } from '@react-native-firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc } from '@react-native-firebase/firestore';
 import { collection, query, where, limit, getDocs } from '@react-native-firebase/firestore';
+import { signInWithSocial, isSocialAuthBusy } from '../services/socialAuth';
 
 // NOTE: the file and hook names (MockAuthProvider / useMockAuth) are kept on purpose so
 // every screen that already imports them keeps working. Inside, login is now real Firebase
@@ -165,8 +166,19 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
               // Keep the saved profile if the re-check cannot run (e.g. offline).
             }
           }
-        } else {
-          const digits = cleanPhone(user.phoneNumber ?? '');
+              } else {
+          // A Google / Facebook account has no phone number. It must NEVER get a new profile here:
+          // it only works once it has been linked to a phone account. (While the sign-in is being
+          // checked, socialAuth.ts removes the empty account itself; otherwise sign out right away.)
+          if (!user.phoneNumber) {
+            if (!isSocialAuthBusy()) {
+              setAuthError('This account is not linked to a PG account. Sign in with your phone number first.');
+              await signOut(getAuth());
+              clearSession();
+            }
+            return;
+          }
+          const digits = cleanPhone(user.phoneNumber);
           profile = (await findResidentProfile(digits)) ?? buildInitialProfile(digits);
           await setDoc(ref, { ...profile, createdAt: Date.now() });
         }
@@ -234,8 +246,9 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const loginWithGoogle = () => {
-    Alert.alert('Google Sign-In', 'Google sign-in will be added in the next step. Please use your phone number for now.');
+   const loginWithGoogle = async () => {
+    const res = await signInWithSocial('google');
+    if (!res.ok && !res.cancelled) Alert.alert('Not signed in', res.message);
   };
 
   const logout = () => {
