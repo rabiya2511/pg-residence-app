@@ -21,6 +21,7 @@ import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/W
 import { isPreBookedNow } from '../../context/AdminContext';
 import { openWhatsApp } from '../../utils/whatsapp';
 import { computeDues, Due } from '../../utils/dues';
+import { useUpiSettings } from '../../hooks/useUpiPayments';
 import ResidentAvatar from '../../components/common/ResidentAvatar';
 type View_ = 'rooms' | 'defaulters';
 type Bucket = 'All' | 'Over30' | 'From15To30' | 'Recent';
@@ -41,7 +42,8 @@ const inBucket = (days: number, bucket: Bucket) =>
 
 export default function AdminPendingDuesScreen() {
   const navigation = useNavigation<any>();
-  const { residents, rooms, properties, paymentRecords, markRentPaid } = useAdmin();
+  const { residents, rooms, properties, paymentRecords, markRentPaid, activePropertyId } = useAdmin();
+  const { lateFeeRules } = useUpiSettings(activePropertyId);
 
   const [view, setView] = useState<View_>('rooms');
   const [bucket, setBucket] = useState<Bucket>('All');
@@ -49,7 +51,7 @@ export default function AdminPendingDuesScreen() {
   const [whatsappVisible, setWhatsappVisible] = useState(false);
 
   // Shared with the dashboard (src/utils/dues.ts) so counts and amounts always match.
-  const dues = useMemo<Due[]>(() => computeDues(residents, rooms, paymentRecords), [residents, rooms, paymentRecords]);
+  const dues = useMemo<Due[]>(() => computeDues(residents, rooms, paymentRecords, lateFeeRules), [residents, rooms, paymentRecords, lateFeeRules]);
 
   const totalOutstanding = dues.reduce((sum, d) => sum + d.outstanding, 0);
   const roomsAffected = new Set(dues.map((d) => d.roomId)).size;
@@ -159,10 +161,11 @@ export default function AdminPendingDuesScreen() {
     Alert.alert(
       'Mark Rent as Paid',
       `Confirm this month's rent from ${d.resident.name}${d.roomNumber !== '—' ? ` (Room ${d.roomNumber})` : ''} has been received?` +
+        (d.lateFeeThisMonth > 0 ? `\n\nIncludes a late fee of ${money(d.lateFeeThisMonth)} for this month.` : '') +
         (d.months > 1 ? `\n\nNote: this only clears the current month. ${d.months} months are pending in total.` : ''),
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Confirm', onPress: () => markRentPaid(d.resident.id) },
+        { text: 'Confirm', onPress: () => markRentPaid(d.resident.id, d.lateFeeThisMonth) },
       ]
     );
 
@@ -306,6 +309,15 @@ export default function AdminPendingDuesScreen() {
           </Text>
         </View>
       </View>
+
+      {d.lateFee > 0 && (
+        <View style={[styles.deductionRow, { backgroundColor: '#FEE2E2' }]}>
+          <Ionicons name="alarm-outline" size={14} color={colors.error} />
+          <Text style={[typography.caption, { color: colors.error, marginLeft: 4, flex: 1 }]}>
+            Includes late fee {money(d.lateFee)}
+          </Text>
+        </View>
+      )}
 
       {d.deduction > 0 && (
         <View style={styles.deductionRow}>

@@ -129,12 +129,31 @@ export const paymentHistory: PaymentRecord[] = [
 
 export type ComplaintStatus = 'Open' | 'In Progress' | 'Resolved';
 
+// The detailed steps a complaint goes through. `status` stays the 3-way bucket that the dashboard,
+// reports and filters already use; `stage` is the finer label the resident and admin see.
+//   Submitted / Under Review -> Open      Assigned / In Progress -> In Progress      Resolved / Closed -> Resolved
+export type ComplaintStage = 'Submitted' | 'Under Review' | 'Assigned' | 'In Progress' | 'Resolved' | 'Closed';
+export const COMPLAINT_STAGES: ComplaintStage[] = ['Submitted', 'Under Review', 'Assigned', 'In Progress', 'Resolved', 'Closed'];
+
+export type ComplaintHistoryEntry = { stage: ComplaintStage; at: number; note?: string };
+
+export const stageToStatus = (stage: ComplaintStage): ComplaintStatus =>
+  stage === 'Submitted' || stage === 'Under Review' ? 'Open' : stage === 'Resolved' || stage === 'Closed' ? 'Resolved' : 'In Progress';
+
+// Older complaints (and ones the resident reopened) have no matching stage: fall back to the status.
+export const stageOf = (c: { status: ComplaintStatus; stage?: ComplaintStage }): ComplaintStage =>
+  c.stage && stageToStatus(c.stage) === c.status ? c.stage : c.status === 'Open' ? 'Submitted' : c.status;
+
 export type Complaint = {
   id: string;
   category: string;
   description: string;
   date: string;
   status: ComplaintStatus;
+  title?: string;
+  stage?: ComplaintStage;
+  assignedTo?: string | null;
+  history?: ComplaintHistoryEntry[];
 };
 
 export const complaints: Complaint[] = [
@@ -536,6 +555,10 @@ export type AdminComplaint = {
   resolvedOn?: string;
   residentId: string;
   propertyId?: string;
+  title?: string;
+  stage?: ComplaintStage;
+  assignedTo?: string | null;
+  history?: ComplaintHistoryEntry[];
 
 };
 

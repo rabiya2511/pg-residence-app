@@ -2,6 +2,10 @@ import React, { createContext, useContext, ReactNode } from 'react';
 import { useAdmin } from './AdminContext';
 import { useMockAuth } from './MockAuthContext';
 import { PaymentRecord } from '../constants/mockData';
+import { useMyUpiPayments, useUpiSettings } from '../hooks/useUpiPayments';
+import { UpiPayment } from '../utils/upiPayments';
+import { computeLateFee, daysLate } from '../utils/lateFee';
+import { parseDue } from '../utils/dues';
 
 type RentStatusType = {
   /** What the resident actually has to pay: rent minus any deduction the admin entered. */
@@ -13,8 +17,16 @@ type RentStatusType = {
   monthLabel: string;
   dueDate: Date;
   dueInDays: number;
-  status: 'Pending' | 'Paid' | 'Overdue';
+  status: 'Pending' | 'Paid' | 'Overdue' | 'Under Verification';
   isPaid: boolean;
+  /** Late fee on this month's rent (already included in `amount`), the days it is based on, and whether the admin waived it. */
+  lateFee: number;
+  lateFeeDays: number;
+  lateFeeWaived: boolean;
+  /** The resident's UPI payment for this month that the admin has not confirmed yet, if any. */
+  pendingVerification: UpiPayment | null;
+  /** The admin's latest rejection for this month (cleared once a new payment is sent or the month is paid). */
+  rejectedPayment: UpiPayment | null;
   /** Everything still unpaid across all months (current + earlier). */
   totalOutstanding: number;
   /** Number of unpaid months. */
@@ -26,24 +38,19 @@ type RentStatusType = {
 type RentContextType = {
   rentStatus: RentStatusType;
   paymentHistory: PaymentRecord[];
-  markRentAsPaid: (method: string) => PaymentRecord;
 };
 
 const RentContext = createContext<RentContextType | undefined>(undefined);
 
-const paymentMethodLabels: Record<string, string> = {
-  upi: 'UPI',
-  card: 'Credit / Debit Card',
-  netbanking: 'Net Banking',
-};
-
 const msPerDay = 1000 * 60 * 60 * 24;
 
 export function RentProvider({ children }: { children: ReactNode }) {
-  const { residents, paymentRecords, recordRentPayment } = useAdmin();
+  const { residents, paymentRecords } = useAdmin();
   const { residentId } = useMockAuth();
+  const { payments: upiPayments } = useMyUpiPayments();
 
   const resident = residents.find((r) => r.id === residentId);
+  const { lateFeeRules } = useUpiSettings(resident?.propertyId);
 
   const now = new Date();
   const currentMonthLabel = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -64,7 +71,12 @@ export function RentProvider({ children }: { children: ReactNode }) {
   const recordAmount = currentRecord?.amount ?? resident?.monthlyRent ?? 0;
   const deduction = Math.min(recordAmount, Number((currentRecord as any)?.deduction) || 0);
   const isPaid = currentRecord?.status === 'Paid';
-  const amountToPay = isPaid ? recordAmount : Math.max(0, recordAmount - deduction);
+  // Late fee: stored on the record once paid; otherwise worked out from today's date unless the admin waived it.
+  const lateFeeWaived = !!(currentRecord as any)?.lateFeeWaived;
+  const paidLateFee = isPaid ? Number((currentRecord as any)?.lateFee) || 0 : 0;
+  const lateFee = isPaid ? paidLateFee : computeLateFee(dueDateObj, now, lateFeeRules, lateFeeWaived);
+  const lateFeeDays = isPaid || lateFeeWaived ? 0 : daysLate(dueDateObj, now, lateFeeRules.graceDays);
+  const amountToPay = isPaid ? recordAmount : Math.max(0, recordAmount - deduction) + lateFee;
 
   const paymentHistory: PaymentRecord[] = paymentRecords
     .filter((p) => p.residentId === residentId && p.status === 'Paid')
@@ -87,43 +99,38 @@ export function RentProvider({ children }: { children: ReactNode }) {
   const unpaid = paymentRecords.filter((p) => p.residentId === residentId && p.status !== 'Paid');
   const totalOutstanding = unpaid.reduce((sum, p) => {
     const d = Math.min(p.amount, Number((p as any).deduction) || 0);
-    return sum + Math.max(0, p.amount - d);
+    const fee = computeLateFee(parseDue(p.dueDate), now, lateFeeRules, !!(p as any).lateFeeWaived);
+    return sum + Math.max(0, p.amount - d) + fee;
   }, 0);
+
+  // Latest UPI submission for this month decides whether the resident is waiting on the admin.
+  const thisMonthUpi = upiPayments.filter((p) => p.month === currentMonthLabel);
+  const pendingVerification = isPaid ? null : thisMonthUpi.find((p) => p.status === 'Under Verification') ?? null;
+  const latestUpi = thisMonthUpi[0] ?? null; // already newest first
+  const rejectedPayment = !isPaid && !pendingVerification && latestUpi?.status === 'Rejected' ? latestUpi : null;
 
   const rentStatus: RentStatusType = {
     amount: amountToPay,
-    grossAmount: isPaid ? recordAmount + deduction : recordAmount,
+    grossAmount: isPaid ? recordAmount + deduction - paidLateFee : recordAmount,
     deduction,
     deductionReason: deduction > 0 ? (currentRecord as any)?.deductionReason ?? null : null,
     monthLabel: `${now.toLocaleDateString('en-US', { month: 'long' })} Rent`,
     dueDate: dueDateObj,
     dueInDays,
-    status: isPaid ? 'Paid' : dueInDays < 0 ? 'Overdue' : 'Pending',
+    status: isPaid ? 'Paid' : pendingVerification ? 'Under Verification' : dueInDays < 0 ? 'Overdue' : 'Pending',
     isPaid,
+    lateFee,
+    lateFeeDays,
+    lateFeeWaived,
+    pendingVerification,
+    rejectedPayment,
     totalOutstanding,
     unpaidMonths: unpaid.length,
     lastPayment,
   };
 
-  const markRentAsPaid = (method: string): PaymentRecord => {
-    if (!residentId) {
-      throw new Error('No resident is currently logged in — cannot record payment.');
-    }
-    const label = paymentMethodLabels[method] ?? method;
-    const record = recordRentPayment(residentId, label, 'resident');
-    return {
-      id: record.id,
-      month: record.month,
-      amount: record.amount,
-      paidOn: record.paidOn ?? '',
-      status: 'Paid',
-      method: record.method,
-      transactionId: record.transactionId,
-    };
-  };
-
   return (
-    <RentContext.Provider value={{ rentStatus, paymentHistory, markRentAsPaid }}>
+    <RentContext.Provider value={{ rentStatus, paymentHistory }}>
       {children}
     </RentContext.Provider>
   );

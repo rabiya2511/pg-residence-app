@@ -1,10 +1,12 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import QRCode from 'react-native-qrcode-svg';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { VisitorRequest, VisitorStatus } from '../../context/VisitorsContext';
+import { passCodeOf, passPayload } from '../../utils/visitorPass';
 
 const STATUS_STYLE: Record<VisitorStatus, { label: string; bg: string; fg: string }> = {
   Pending: { label: 'Pending', bg: colors.amberBg, fg: '#92400E' },
@@ -21,6 +23,8 @@ type Props = {
 };
 
 export default function VisitorCard({ visitor, onCancel }: Props) {
+  const [showPass, setShowPass] = useState(false);
+  const hasPass = visitor.status === 'Approved' || visitor.status === 'Checked In';
   const s = STATUS_STYLE[visitor.status] ?? STATUS_STYLE.Pending;
   const canCancel = visitor.status === 'Pending' || visitor.status === 'Approved';
 
@@ -88,12 +92,42 @@ export default function VisitorCard({ visitor, onCancel }: Props) {
           </Text>
         )}
 
+        {hasPass && (
+          <TouchableOpacity style={styles.passButton} onPress={() => setShowPass(true)} activeOpacity={0.85}>
+            <Ionicons name="qr-code-outline" size={16} color={colors.white} />
+            <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>
+              Show entry pass
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {canCancel && onCancel && (
           <TouchableOpacity style={styles.cancelButton} onPress={onCancel} activeOpacity={0.8}>
             <Text style={[typography.caption, { color: colors.error, fontWeight: '700' }]}>Cancel Request</Text>
           </TouchableOpacity>
         )}
       </View>
+
+      <Modal visible={showPass} transparent animationType="fade" onRequestClose={() => setShowPass(false)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowPass(false)}>
+          <View style={styles.passSheet}>
+            <Text style={[typography.heading3, { color: colors.text }]}>Visitor Entry Pass</Text>
+            <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.md }]}>
+              Show this at the gate
+            </Text>
+            <View style={styles.qrBox}>
+              <QRCode value={passPayload(visitor.id)} size={190} />
+            </View>
+            <Text style={styles.passCode}>{passCodeOf(visitor.id)}</Text>
+            <Text style={[typography.bodyBold, { color: colors.text, marginTop: spacing.sm }]}>{visitor.visitorName}</Text>
+            {!!when && <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>{when}</Text>}
+            {visitor.numVisitors > 1 && (
+              <Text style={[typography.caption, { color: colors.textMuted }]}>{visitor.numVisitors} visitors</Text>
+            )}
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.md }]}>Tap anywhere to close</Text>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -128,6 +162,20 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
     marginTop: spacing.sm,
   },
+  passButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    paddingVertical: 7,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
+  passSheet: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg, alignItems: 'center', alignSelf: 'stretch' },
+  qrBox: { backgroundColor: '#FFFFFF', padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  passCode: { fontSize: 26, fontWeight: '800', letterSpacing: 4, color: colors.text, marginTop: spacing.md },
   cancelButton: {
     alignSelf: 'flex-start',
     borderWidth: 1,

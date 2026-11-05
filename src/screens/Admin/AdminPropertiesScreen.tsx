@@ -67,7 +67,10 @@ export default function AdminPropertiesScreen() {
     );
   }, [properties, query]);
 
+  // Pencil icon: the property form (details, logo, UPI, rules, links).
   const openEdit = (propertyId: string) => navigation.navigate('AdminPropertyForm', { propertyId });
+  // Gear icon: the Admin Settings screen (biometric lock, auto logout, log out).
+  const openSettings = () => navigation.navigate('AdminSettings');
   const openDashboard = () =>
     isEntry
       ? navigation.replace('AdminTabs', { screen: 'Dashboard' })
@@ -276,15 +279,15 @@ export default function AdminPropertiesScreen() {
                 >
                   <Ionicons name="eye" size={24} color={colors.primary} />
                 </TouchableOpacity>
-                {/* Configure (logo, UPI, rules, links) */}
+                {/* Settings gear: opens the Admin Settings screen */}
                 <TouchableOpacity
-                  onPress={() => openEdit(property.id)}
+                  onPress={openSettings}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   style={styles.iconAction}
                 >
                   <Ionicons name="settings" size={22} color={colors.primary} />
                 </TouchableOpacity>
-                {/* Edit details */}
+                {/* Pencil: edit the property details (property form) */}
                 <TouchableOpacity
                   onPress={() => openEdit(property.id)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}

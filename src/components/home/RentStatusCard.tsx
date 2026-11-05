@@ -28,12 +28,14 @@ export default function RentStatusCard({
 
   const isPaid = status === 'Paid';
   const isOverdue = status === 'Overdue';
+  const isVerifying = status === 'Under Verification';
 
   const badgeBg = isPaid ? colors.successBg : isOverdue ? colors.errorBg : colors.amberBg;
   const badgeText = isPaid ? colors.success : isOverdue ? colors.error : colors.secondary;
 
   let dueText: string;
   if (isPaid) dueText = 'Paid for this month';
+  else if (isVerifying) dueText = 'Waiting for the admin to confirm your payment';
   else if (isOverdue) dueText = `Overdue by ${Math.abs(dueInDays)} day${Math.abs(dueInDays) === 1 ? '' : 's'}`;
   else if (dueInDays === 0) dueText = 'Due today';
   else dueText = `Due in ${dueInDays} day${dueInDays === 1 ? '' : 's'}`;
@@ -82,7 +84,7 @@ export default function RentStatusCard({
         onPress={() => navigation.navigate('RentDetails' as never)}
       >
         <Text style={[typography.button, { color: colors.white }]}>
-          {isPaid ? 'View Details' : 'Pay / View Details'}
+          {isPaid || isVerifying ? 'View Details' : 'Pay / View Details'}
         </Text>
       </TouchableOpacity>
     </View>

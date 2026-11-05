@@ -11,6 +11,8 @@ import {
   formatPropertyAddress,
   AdminResident,
   AdminComplaint,
+  ComplaintStage,
+  stageToStatus,
   AdminIdentityDocument,
   AdminDailyGuest,
   AdminDailyGuestPaymentMethod,
@@ -76,6 +78,7 @@ export type AddComplaintInput = {
   room: string;
   category: string;
   description: string;
+  title?: string;
   residentId?: string;
   propertyId?: string;
   // Local photo URIs (camera / gallery). Uploaded to Storage after the complaint is saved.
@@ -158,6 +161,12 @@ export type RecordRentPaymentOptions = {
   dueDay?: number;
   propertyId?: string;
   residentName?: string;
+  /** Rent month being paid, when it is not the current month (e.g. a UPI payment made on the 31st and verified on the 2nd). */
+  forMonth?: Date;
+  /** When the money was actually paid. Defaults to now; also drives Early / On Time / Late. */
+  paidAt?: Date;
+  /** Late fee collected together with this month's rent (added to the amount stored on the record). */
+  lateFee?: number;
 };
 
 type AdminContextType = {
@@ -177,7 +186,9 @@ type AdminContextType = {
   setActiveProperty: (propertyId: string) => void;
   rooms: Room[];
   archivedResidents: ArchivedResident[];
-  markRentPaid: (residentId: string) => void;
+  markRentPaid: (residentId: string, lateFee?: number) => void;
+  /** Waives (or restores) the late fee on THIS resident's rent for the current month. */
+  setLateFeeWaiver: (residentId: string, waived: boolean, reason?: string) => void;
   /** Sets (or clears, with 0) a deduction on THIS resident's rent for the current month. Pending shows rent minus deduction. */
   setRentDeduction: (residentId: string, amount: number, reason?: string) => void;
   recordRentPayment: (
@@ -195,6 +206,8 @@ type AdminContextType = {
   markComplaintNotificationRead: (notificationId: string) => void;
   markAllComplaintNotificationsRead: () => void;
   updateComplaintStatus: (complaintId: string, status: AdminComplaint['status']) => void;
+  /** Moves a complaint to a detailed step (Submitted ... Closed), optionally assigning staff, and logs it in its history. */
+  setComplaintStage: (complaintId: string, stage: ComplaintStage, assignedTo?: string) => void;
   /** The admin's reply on a complaint; the resident sees it on their Complaints screen. */
   setComplaintComment: (complaintId: string, comment: string) => void;
   markComplaintViewed: (complaintId: string) => void;
@@ -824,8 +837,40 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, [residents, notifQ.data, residentsLoaded, notifQ.loaded, isAdminSession, dayKey]);
 
   // ───────── Rent payments ─────────
-  const markRentPaid = (residentId: string) => {
-    recordRentPayment(residentId, 'Cash');
+  const markRentPaid = (residentId: string, lateFee: number = 0) => {
+    recordRentPayment(residentId, 'Cash', 'admin', lateFee > 0 ? { lateFee } : undefined);
+  };
+
+  // Late-fee waiver for the current month (creates the month's record first if it does not exist yet).
+  const setLateFeeWaiver = (residentId: string, waived: boolean, reason: string = '') => {
+    const resident = rawResidents.find((r) => r.id === residentId);
+    if (!resident) return;
+    const now = new Date();
+    const label = getMonthLabel(now);
+    const existing = paymentsQ.data.find((p) => p.residentId === residentId && p.month === label);
+    const recordId = existing?.id ?? paymentDocId(residentId, label);
+    const due = getDueDateForMonth(now, resident.rentDueDay);
+    setDoc(
+      doc(db, 'payments', recordId),
+      clean({
+        ...(existing
+          ? {}
+          : {
+              id: recordId,
+              residentId,
+              propertyId: resident.propertyId,
+              month: label,
+              amount: resident.monthlyRent,
+              dueDate: formatDisplayDate(due),
+              paidOn: null,
+              status: now.getTime() > due.getTime() ? 'Overdue' : 'Pending',
+              createdAt: Date.now(),
+            }),
+        lateFeeWaived: waived,
+        lateFeeWaiveReason: waived ? reason.trim() || null : null,
+      }),
+      { merge: true }
+    ).catch(warn('setLateFeeWaiver:'));
   };
 
   // Deduction on one resident's rent for the current month (e.g. 500 off a 9000 rent -> 8500 due).
@@ -868,12 +913,13 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     source: 'resident' | 'admin' = 'admin',
     options?: RecordRentPaymentOptions
   ): AdminPaymentRecord => {
-    const now = new Date();
-    const label = getMonthLabel(now);
+    const now = options?.paidAt ?? new Date();
+    const monthDate = options?.forMonth ?? now;
+    const label = getMonthLabel(monthDate);
     const resident = rawResidents.find((r) => r.id === residentId);
     const propertyId = options?.propertyId ?? resident?.propertyId ?? '';
     const residentName = options?.residentName ?? resident?.name;
-    const dueDateObj = getDueDateForMonth(now, options?.dueDay ?? resident?.rentDueDay ?? 5);
+    const dueDateObj = getDueDateForMonth(monthDate, options?.dueDay ?? resident?.rentDueDay ?? 5);
     const paidOnStr = formatDisplayDate(now);
 
     const timing: PaymentTiming =
@@ -891,7 +937,10 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       residentId,
       month: label,
       // Any deduction agreed for this month comes off what is actually collected.
-      amount: Math.max(0, (existing?.amount ?? options?.amount ?? resident?.monthlyRent ?? 0) - (existing?.deduction ?? 0)),
+      // The late fee (if any) is collected on top of the rent.
+      amount:
+        Math.max(0, (existing?.amount ?? options?.amount ?? resident?.monthlyRent ?? 0) - (existing?.deduction ?? 0)) +
+        Math.max(0, Math.round(options?.lateFee ?? 0)),
       dueDate: existing?.dueDate ?? formatDisplayDate(dueDateObj),
       paidOn: paidOnStr,
       status: 'Paid',
@@ -902,7 +951,12 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
     setDoc(
       doc(db, 'payments', recordId),
-      clean({ ...record, propertyId, createdAt: existing?.createdAt ?? Date.now() }),
+      clean({
+        ...record,
+        propertyId,
+        createdAt: existing?.createdAt ?? Date.now(),
+        ...((options?.lateFee ?? 0) > 0 ? { lateFee: Math.round(options!.lateFee!) } : {}),
+      }),
       { merge: true }
     ).catch(warn('recordRentPayment:'));
     updateDoc(doc(db, 'residents', residentId), { rentStatus: 'Paid' }).catch(warn('rentStatus:'));
@@ -929,18 +983,31 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   };
 
   // ───────── Complaints ─────────
-  const updateComplaintStatus = (complaintId: string, status: AdminComplaint['status']) => {
+  const setComplaintStage = (complaintId: string, stage: ComplaintStage, assignedTo?: string) => {
     const today = formatDisplayDate(new Date());
+    const existing: any = complaintsQ.data.find((x: any) => x.id === complaintId);
+    const history = Array.isArray(existing?.history) ? existing.history : [];
+    const status = stageToStatus(stage);
     updateDoc(
       doc(db, 'complaints', complaintId),
       clean({
         status,
-        ...(status === 'In Progress' ? { inProgressOn: today } : {}),
-             ...(status === 'Resolved' ? { resolvedOn: today } : {}),
+        stage,
+        ...(assignedTo !== undefined ? { assignedTo: assignedTo || null } : {}),
+        ...(status === 'In Progress' ? { inProgressOn: existing?.inProgressOn ?? today } : {}),
+        ...(status === 'Resolved' ? { resolvedOn: existing?.resolvedOn ?? today } : {}),
         ...(status === 'Open' ? { inProgressOn: null, resolvedOn: null } : {}),
+        history: [
+          ...history,
+          { stage, at: Date.now(), ...(assignedTo ? { note: `Assigned to ${assignedTo}` } : {}) },
+        ],
       })
-    ).catch(warn('updateComplaintStatus:'));
+    ).catch(warn('setComplaintStage:'));
   };
+
+  // Older callers that only know Open / In Progress / Resolved.
+  const updateComplaintStatus = (complaintId: string, status: AdminComplaint['status']) =>
+    setComplaintStage(complaintId, status === 'Open' ? 'Submitted' : status);
     const setComplaintComment = (complaintId: string, comment: string) => {
     const text = comment.trim();
     updateDoc(
@@ -1098,6 +1165,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       date: formatDisplayDate(new Date()),
       status: 'Open',
       viewed: false,
+      ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+      stage: 'Submitted',
+      history: [{ stage: 'Submitted', at: Date.now() }],
     };
     setDoc(
       doc(db, 'complaints', id),
@@ -2003,6 +2073,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         archivedResidents,
         markRentPaid,
         setRentDeduction,
+        setLateFeeWaiver,
         recordRentPayment,
         markNotificationRead,
         markAllNotificationsRead,
@@ -2012,6 +2083,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         markComplaintNotificationRead,
         markAllComplaintNotificationsRead,
         updateComplaintStatus,
+        setComplaintStage,
         setComplaintComment,
         markComplaintViewed,
         clearComplaints,

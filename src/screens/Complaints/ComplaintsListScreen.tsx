@@ -7,12 +7,47 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useComplaints, ResidentComplaint } from '../../context/ComplaintsContext';
+import { stageOf } from '../../constants/mockData';
 
 const statusStyle: Record<string, { bg: string; text: string }> = {
-  Open: { bg: '#FEE2E2', text: colors.error },
+  Submitted: { bg: '#FEE2E2', text: colors.error },
+  'Under Review': { bg: '#FFEDD5', text: '#C2410C' },
+  Assigned: { bg: '#DBEAFE', text: '#2563EB' },
   'In Progress': { bg: '#FEF3C7', text: colors.warning },
   Resolved: { bg: '#D1FAE5', text: colors.success },
+  Closed: { bg: '#E5E7EB', text: '#6B7280' },
 };
+
+const fmtAt = (ts: number) =>
+  new Date(ts).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+
+// Every step the complaint has been through, newest last (complaints raised before this existed
+// have no history and keep the simple 3-step timeline below).
+function HistoryList({ c }: { c: ResidentComplaint }) {
+  const items = c.history ?? [];
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      {items.map((h, i) => {
+        const last = i === items.length - 1;
+        return (
+          <View key={`${h.stage}-${h.at}-${i}`} style={styles.histRow}>
+            <View style={styles.histRail}>
+              <View style={[styles.dot, styles.dotOn, last && { backgroundColor: colors.primary }]} />
+              {!last && <View style={[styles.histLine]} />}
+            </View>
+            <View style={{ flex: 1, paddingBottom: last ? 0 : spacing.sm }}>
+              <Text style={[typography.caption, { color: colors.text, fontWeight: '700' }]}>{h.stage}</Text>
+              <Text style={styles.stepDate}>
+                {fmtAt(h.at)}
+                {h.note ? ` · ${h.note}` : ''}
+              </Text>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
 
 // Submitted -> In Progress -> Resolved, with the date each step was reached.
 function Timeline({ c }: { c: ResidentComplaint }) {
@@ -67,18 +102,21 @@ function ComplaintItem({
   onReopen: () => void;
   onRate: (n: number) => void;
 }) {
-  const st = statusStyle[c.status] ?? statusStyle.Open;
+  const stage = stageOf(c);
+  const st = statusStyle[stage] ?? statusStyle.Submitted;
+  const isResolved = c.status === 'Resolved';
   return (
     <View style={styles.card}>
       <View style={styles.rowBetween}>
         <View style={{ flex: 1, marginRight: spacing.sm }}>
-          <Text style={[typography.bodyBold, { color: colors.text }]}>{c.category}</Text>
+          <Text style={[typography.bodyBold, { color: colors.text }]}>{c.title || c.category}</Text>
           <Text style={[typography.caption, { color: colors.textMuted }]}>
-            #{c.id.slice(-6).toUpperCase()} · {c.date}
+            #{c.id.slice(-6).toUpperCase()}
+            {c.title ? ` · ${c.category}` : ''} · {c.date}
           </Text>
         </View>
         <View style={[styles.badge, { backgroundColor: st.bg }]}>
-          <Text style={[typography.caption, { color: st.text, fontWeight: '700' }]}>{c.status}</Text>
+          <Text style={[typography.caption, { color: st.text, fontWeight: '700' }]}>{stage}</Text>
         </View>
       </View>
 
@@ -94,7 +132,14 @@ function ComplaintItem({
         </View>
       )}
 
-      <Timeline c={c} />
+      {!!c.assignedTo && (
+        <View style={styles.assignedRow}>
+          <Ionicons name="person-circle-outline" size={16} color={colors.primary} />
+          <Text style={[typography.caption, { color: colors.text, marginLeft: 6 }]}>Assigned to {c.assignedTo}</Text>
+        </View>
+      )}
+
+      {(c.history?.length ?? 0) > 0 ? <HistoryList c={c} /> : <Timeline c={c} />}
 
       {!!c.reopenedOn && (
         <Text style={[typography.caption, { color: colors.textMuted, marginTop: 4 }]}>Reopened on {c.reopenedOn}</Text>
@@ -112,7 +157,7 @@ function ComplaintItem({
         </View>
       )}
 
-      {c.status === 'Resolved' && (
+      {isResolved && (
         <View style={styles.resolvedBox}>
           {c.rating ? (
             <View style={styles.rowBetween}>
@@ -127,10 +172,16 @@ function ComplaintItem({
               <Stars value={0} onPick={onRate} />
             </View>
           )}
-          <TouchableOpacity style={styles.reopenBtn} onPress={onReopen} activeOpacity={0.85}>
-            <Ionicons name="refresh" size={16} color={colors.error} />
-            <Text style={styles.reopenText}>Not fixed? Reopen</Text>
-          </TouchableOpacity>
+          {stage !== 'Closed' ? (
+            <TouchableOpacity style={styles.reopenBtn} onPress={onReopen} activeOpacity={0.85}>
+              <Ionicons name="refresh" size={16} color={colors.error} />
+              <Text style={styles.reopenText}>Not fixed? Reopen</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.sm }]}>
+              This complaint is closed. Raise a new one if the issue comes back.
+            </Text>
+          )}
         </View>
       )}
     </View>
@@ -241,6 +292,10 @@ const styles = StyleSheet.create({
   dotOn: { backgroundColor: colors.success },
   line: { flex: 1, height: 2, backgroundColor: colors.border, marginHorizontal: 2 },
   lineOn: { backgroundColor: colors.success },
+  histRow: { flexDirection: 'row' },
+  histRail: { width: 20, alignItems: 'center' },
+  histLine: { flex: 1, width: 2, backgroundColor: colors.success, marginTop: 2 },
+  assignedRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm },
   stepLabel: { fontSize: 11, color: colors.textMuted },
   stepDate: { fontSize: 10, color: colors.textMuted },
   commentBox: {

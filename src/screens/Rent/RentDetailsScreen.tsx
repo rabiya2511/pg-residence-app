@@ -41,11 +41,20 @@ export default function RentDetailsScreen() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const { status, isPaid, amount, grossAmount, deduction, deductionReason } = rentStatus;
-  const statusColor = status === 'Paid' ? colors.success : status === 'Overdue' ? colors.error : colors.primary;
+  const { status, isPaid, amount, grossAmount, deduction, deductionReason, pendingVerification, rejectedPayment } = rentStatus;
+  const statusColor =
+    status === 'Paid'
+      ? colors.success
+      : status === 'Overdue'
+      ? colors.error
+      : status === 'Under Verification'
+      ? colors.warning
+      : colors.primary;
 
   const dueText = isPaid
     ? 'Paid for this month'
+    : pendingVerification
+    ? 'Waiting for the admin to confirm your payment'
     : rentStatus.dueInDays < 0
     ? `Overdue by ${Math.abs(rentStatus.dueInDays)} day${Math.abs(rentStatus.dueInDays) === 1 ? '' : 's'}`
     : rentStatus.dueInDays === 0
@@ -141,6 +150,24 @@ export default function RentDetailsScreen() {
           <Text style={[typography.caption, { color: status === 'Overdue' ? colors.error : colors.textMuted, marginTop: 2 }]}>
             {dueText} · Due date {dueDateText}
           </Text>
+
+          {!!pendingVerification && (
+            <View style={[styles.deductionBox, { backgroundColor: '#FEF3C7' }]}>
+              <Text style={[typography.caption, { color: colors.text }]}>
+                UPI reference {pendingVerification.upiRef} sent for verification.
+              </Text>
+            </View>
+          )}
+          {!!rejectedPayment && (
+            <View style={[styles.deductionBox, { backgroundColor: '#FEE2E2' }]}>
+              <Text style={[typography.caption, { color: colors.error, fontWeight: '700' }]}>
+                Your last payment (ref {rejectedPayment.upiRef}) was rejected
+              </Text>
+              {!!rejectedPayment.reviewNote && (
+                <Text style={[typography.caption, { color: colors.text, marginTop: 2 }]}>{rejectedPayment.reviewNote}</Text>
+              )}
+            </View>
+          )}
 
           {deduction > 0 && (
             <View style={styles.deductionBox}>
@@ -340,14 +367,16 @@ export default function RentDetailsScreen() {
       </ScrollView>
 
       {/* Pay Now only while this month's rent is unpaid */}
-      {!isPaid && amount > 0 && (
+      {!isPaid && !pendingVerification && amount > 0 && (
         <View style={styles.footer}>
           <TouchableOpacity
             style={styles.payButton}
             activeOpacity={0.85}
             onPress={() => navigation.navigate('PayRent')}
           >
-            <Text style={[typography.button, { color: colors.white }]}>Pay Now · {inr(amount)}</Text>
+            <Text style={[typography.button, { color: colors.white }]}>
+              {rejectedPayment ? 'Pay Again' : 'Pay Now'} · {inr(amount)}
+            </Text>
           </TouchableOpacity>
         </View>
       )}

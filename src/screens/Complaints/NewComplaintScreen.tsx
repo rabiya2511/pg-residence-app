@@ -23,10 +23,11 @@ import { useComplaints } from '../../context/ComplaintsContext';
 export default function NewComplaintScreen() {
   const navigation = useNavigation<any>();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
 
-  const canSubmit = selectedCategory !== null && description.trim().length > 0;
+  const canSubmit = selectedCategory !== null && title.trim().length >= 3 && description.trim().length > 0;
 
   const { addComplaint } = useComplaints();
 
@@ -70,7 +71,7 @@ export default function NewComplaintScreen() {
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    addComplaint(selectedCategory!, description.trim(), photos);
+    addComplaint(selectedCategory!, description.trim(), photos, title.trim());
     Alert.alert('Complaint Submitted', 'Your complaint has been logged. The PG team will review it shortly.', [
       { text: 'OK', onPress: () => navigation.goBack() },
     ]);
@@ -112,6 +113,18 @@ export default function NewComplaintScreen() {
             );
           })}
         </View>
+
+        <Text style={[typography.bodyBold, { color: colors.text, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+          Title
+        </Text>
+        <TextInput
+          style={styles.titleInput}
+          placeholder="Short summary, e.g. Fan making noise"
+          placeholderTextColor={colors.textMuted}
+          value={title}
+          onChangeText={setTitle}
+          maxLength={80}
+        />
 
         <Text style={[typography.bodyBold, { color: colors.text, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
           Description
@@ -193,6 +206,15 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   categoryChipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+  titleInput: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    fontSize: 15,
+    color: colors.text,
+  },
   textArea: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,

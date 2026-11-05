@@ -19,6 +19,7 @@ import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
+import { passCodeOf } from '../../utils/visitorPass';
 
 type Filter = 'Pending' | 'Approved' | 'Inside' | 'History';
 const FILTERS: Filter[] = ['Pending', 'Approved', 'Inside', 'History'];
@@ -31,6 +32,13 @@ const inFilter = (f: Filter, status: string) =>
     : f === 'Inside'
     ? status === 'Checked In'
     : ['Rejected', 'Cancelled', 'Checked Out'].includes(status);
+
+const isToday = (ts?: number) => {
+  if (!ts) return true; // older records have no date stamp: do not block them
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return ts === d.getTime();
+};
 
 const timeNow = () => new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
@@ -45,6 +53,7 @@ export default function AdminVisitorsScreen() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectFor, setRejectFor] = useState<any | null>(null);
   const [reason, setReason] = useState('');
+  const [search, setSearch] = useState('');
 
   // Visitors of the property the admin is working in, live.
   useEffect(() => {
@@ -73,12 +82,18 @@ export default function AdminVisitorsScreen() {
     return c;
   }, [rows]);
 
+  // Typing a pass code (or a visitor name) searches every request, whatever tab is open.
+  const term = search.trim().toLowerCase();
   const shown = useMemo(
     () =>
       rows
-        .filter((v) => inFilter(filter, v.status))
+        .filter((v) =>
+          term
+            ? passCodeOf(v.id).toLowerCase().includes(term) || (v.visitorName ?? '').toLowerCase().includes(term)
+            : inFilter(filter, v.status)
+        )
         .sort((a, b) => (a.expectedDateTs ?? 0) - (b.expectedDateTs ?? 0) || (b.createdAt ?? 0) - (a.createdAt ?? 0)),
-    [rows, filter]
+    [rows, filter, term]
   );
 
   // Only acts when the request is still in the state the button was shown for
@@ -109,8 +124,19 @@ export default function AdminVisitorsScreen() {
   };
 
   const approve = (v: any) => update(v.id, 'Pending', { status: 'Approved', decidedAt: Date.now() });
-  const checkIn = (v: any) =>
+  const doCheckIn = (v: any) =>
     update(v.id, 'Approved', { status: 'Checked In', checkInTime: timeNow(), checkInAt: Date.now() });
+  // A pass is for one day: ask before letting someone in on another date.
+  const checkIn = (v: any) => {
+    if (isToday(v.expectedDateTs)) {
+      doCheckIn(v);
+      return;
+    }
+    Alert.alert('Pass is for another date', `${v.visitorName}'s visit is booked for ${v.expectedDate}. Let them in anyway?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Let in', onPress: () => doCheckIn(v) },
+    ]);
+  };
   const checkOut = (v: any) =>
     update(v.id, 'Checked In', { status: 'Checked Out', checkOutTime: timeNow(), checkOutAt: Date.now() });
 
@@ -142,6 +168,11 @@ export default function AdminVisitorsScreen() {
         <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
           For {v.residentName || 'resident'}{v.room ? ` · Room ${v.room}` : ''}
         </Text>
+        {['Approved', 'Checked In'].includes(v.status) && (
+          <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginTop: 2 }]}>
+            Pass {passCodeOf(v.id)}
+          </Text>
+        )}
         <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
           {[v.relationship, v.purpose].filter(Boolean).join(' · ')}
           {(v.numVisitors ?? 1) > 1 ? ` · ${v.numVisitors} visitors` : ''}
@@ -214,6 +245,24 @@ export default function AdminVisitorsScreen() {
         <View style={{ width: 22 }} />
       </View>
 
+      <View style={styles.searchBox}>
+        <Ionicons name="search-outline" size={16} color={colors.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Find by pass code or visitor name"
+          placeholderTextColor={colors.textMuted}
+          value={search}
+          onChangeText={setSearch}
+          autoCapitalize="characters"
+          autoCorrect={false}
+        />
+        {!!search && (
+          <TouchableOpacity onPress={() => setSearch('')} hitSlop={8}>
+            <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+      </View>
+
       <View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
           {FILTERS.map((f) => (
@@ -238,7 +287,7 @@ export default function AdminVisitorsScreen() {
         <View style={styles.center}>
           <Ionicons name="people-outline" size={48} color={colors.textMuted} />
           <Text style={[typography.body, { color: colors.textMuted, marginTop: spacing.sm }]}>
-            No {filter.toLowerCase()} visitor requests.
+            {term ? 'No request matches that pass code or name.' : `No ${filter.toLowerCase()} visitor requests.`}
           </Text>
         </View>
       ) : (
@@ -290,6 +339,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  searchInput: { flex: 1, paddingVertical: 8, marginLeft: 6, color: colors.text },
   chipRow: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm, gap: spacing.xs },
   chip: {
     backgroundColor: colors.surface,

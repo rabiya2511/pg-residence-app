@@ -1,6 +1,7 @@
 // Single source of truth for "who owes rent and how much".
 // Used by the Pending Dues screen AND the dashboard so their counts and amounts always agree.
 import { AdminResident } from '../constants/mockData';
+import { LateFeeRules, NO_LATE_FEE, computeLateFee } from './lateFee';
 
 export type Due = {
   resident: AdminResident;
@@ -14,6 +15,9 @@ export type Due = {
   gross: number;
   deduction: number;
   deductionReason: string | null;
+  /** Late fee on all unpaid months (already inside `outstanding`), and the part that belongs to THIS month. */
+  lateFee: number;
+  lateFeeThisMonth: number;
   months: number;
   oldestDue: Date;
   daysOverdue: number;
@@ -49,7 +53,12 @@ const net = (p: any) => Math.max(0, (Number(p.amount) || 0) - (Number(p.deductio
  *  - if this month has no record yet, this month's rent is added so it is never missed;
  *  - months already marked Paid never count.
  */
-export function computeDues(residents: AdminResident[], rooms: any[], paymentRecords: any[]): Due[] {
+export function computeDues(
+  residents: AdminResident[],
+  rooms: any[],
+  paymentRecords: any[],
+  lateFeeRules: LateFeeRules = NO_LATE_FEE
+): Due[] {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const thisMonth = monthLabel(now);
@@ -62,7 +71,13 @@ export function computeDues(residents: AdminResident[], rooms: any[], paymentRec
       const unpaid = mine.filter((p) => p.status !== 'Paid');
       const hasThisMonth = mine.some((p) => p.month === thisMonth);
 
-      let outstanding = unpaid.reduce((sum, p) => sum + net(p), 0);
+      // Late fee per unpaid month, counted from that month's own due date (unless the admin waived it).
+      const feeOf = (p: any) => computeLateFee(parseDue(p.dueDate), now, lateFeeRules, !!p.lateFeeWaived);
+      const lateFeeOld = unpaid.reduce((sum, p) => sum + feeOf(p), 0);
+      let lateFeeThisMonth = unpaid.filter((p) => p.month === thisMonth).reduce((sum, p) => sum + feeOf(p), 0);
+      let lateFee = lateFeeOld;
+
+      let outstanding = unpaid.reduce((sum, p) => sum + net(p), 0) + lateFeeOld;
       let gross = unpaid.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
       const deduction = unpaid.reduce((sum, p) => sum + (Number(p.deduction) || 0), 0);
       const deductionReason: string | null =
@@ -74,7 +89,12 @@ export function computeDues(residents: AdminResident[], rooms: any[], paymentRec
         outstanding += r.monthlyRent;
         gross += r.monthlyRent;
         months += 1;
-        dueDates.push(new Date(now.getFullYear(), now.getMonth(), r.rentDueDay || 5));
+        const due = new Date(now.getFullYear(), now.getMonth(), r.rentDueDay || 5);
+        dueDates.push(due);
+        const fee = computeLateFee(due, now, lateFeeRules, false);
+        lateFee += fee;
+        lateFeeThisMonth += fee;
+        outstanding += fee;
       }
 
       const oldestDue =
@@ -93,6 +113,8 @@ export function computeDues(residents: AdminResident[], rooms: any[], paymentRec
         gross,
         deduction,
         deductionReason,
+        lateFee,
+        lateFeeThisMonth,
         months: Math.max(1, months),
         oldestDue,
         daysOverdue,

@@ -18,7 +18,7 @@ export type ResidentComplaint = Complaint & {
 
 type ComplaintsContextType = {
   complaints: ResidentComplaint[];
-  addComplaint: (category: string, description: string, photoUris?: string[]) => void;
+  addComplaint: (category: string, description: string, photoUris?: string[], title?: string) => void;
   /** Sends a resolved complaint back to Open (the admin sees it as new again). */
   reopenComplaint: (id: string) => Promise<boolean>;
   /** Satisfaction rating (1 to 5) for a resolved complaint. */
@@ -36,7 +36,7 @@ export function ComplaintsProvider({ children }: { children: ReactNode }) {
   const { residents, rooms, complaints: adminComplaints, addComplaint: addAdminComplaint } = useAdmin();
   const db = getFirestore();
 
-  const addComplaint = (category: string, description: string, photoUris: string[] = []) => {
+  const addComplaint = (category: string, description: string, photoUris: string[] = [], title?: string) => {
     const resident = residents.find((r) => r.id === residentId);
     const room = rooms.find((r) => r.id === resident?.roomId);
     // Creates the complaint in Firestore (admin dashboard, Complaints tab, bell notification).
@@ -45,6 +45,7 @@ export function ComplaintsProvider({ children }: { children: ReactNode }) {
       room: room?.roomNumber ?? '-',
       category,
       description,
+      title,
       photoUris,
     });
   };
@@ -94,6 +95,10 @@ export function ComplaintsProvider({ children }: { children: ReactNode }) {
           description: c.description,
           date: c.date,
           status: c.status,
+          title: c.title ?? undefined,
+          stage: c.stage ?? undefined,
+          assignedTo: c.assignedTo ?? null,
+          history: Array.isArray(c.history) ? c.history : [],
           photos: Array.isArray(c.photos) ? c.photos : [],
           inProgressOn: c.inProgressOn ?? null,
           resolvedOn: c.resolvedOn ?? null,

@@ -3,13 +3,14 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Pl
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useMockAuth } from '../../context/MockAuthContext';
 import { useAdmin } from '../../context/AdminContext';
-import { useAppSettings } from '../../utils/appSettings';
+import { updateSettings, useAppSettings } from '../../utils/appSettings';
 
 const TIMEOUTS = [
   { label: 'Never', minutes: 0 },
@@ -32,6 +33,29 @@ export default function SettingsScreen() {
     // Turning it off clears reminders already scheduled; turning it on schedules again on the next app start.
     if (!on) Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
     else Alert.alert('Rent reminders on', 'Your reminder will be scheduled the next time you open the app.');
+  };
+
+  const toggleBiometric = async (on: boolean) => {
+    if (!on) {
+      updateSettings({ biometricLock: false });
+      return;
+    }
+    try {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!hasHardware || !enrolled) {
+        Alert.alert(
+          'Not Available',
+          'Set up a fingerprint, face unlock or screen lock in your phone settings first, then try again.'
+        );
+        return;
+      }
+      // Confirm it works before turning it on, so nobody gets locked out by mistake.
+      const result = await LocalAuthentication.authenticateAsync({ promptMessage: 'Confirm to turn on app lock' });
+      if (result.success) updateSettings({ biometricLock: true });
+    } catch {
+      Alert.alert('Not Available', 'Biometric lock could not be turned on on this device.');
+    }
   };
 
   const confirmLogout = () =>
@@ -81,7 +105,15 @@ export default function SettingsScreen() {
         <Text style={styles.note}>Notices, complaint and visitor updates appear inside the app. Push alerts for them are not available yet.</Text>
 
         <Text style={styles.section}>SECURITY</Text>
-        <View style={[styles.card, { padding: spacing.md }]}>
+        <View style={styles.card}>
+          <Row
+            icon="finger-print-outline"
+            title="Biometric lock"
+            sub="Ask for fingerprint, face or phone PIN when opening the app"
+            right={<Switch value={settings.biometricLock} onValueChange={toggleBiometric} trackColor={{ true: colors.primary }} />}
+          />
+        </View>
+        <View style={[styles.card, { padding: spacing.md, marginTop: spacing.sm }]}>
           <Text style={[typography.body, { color: colors.text }]}>Auto logout after inactivity</Text>
           <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2, marginBottom: spacing.sm }]}>
             You are signed out if the app is left unused for this long.

@@ -17,6 +17,9 @@ import { useAdminVisitors } from '../../hooks/useAdminVisitors';
 import { useAdminSupport } from '../../hooks/useAdminSupport';
 import { useAdminLaundry } from '../../hooks/useLaundry';
 import { useAdminFeedback } from '../../hooks/useFeedback';
+import { useUpiSettings } from '../../hooks/useUpiPayments';
+import ChartCard from '../../components/charts/ChartCard';
+import { collectionRows, collectedByMonthChart } from '../../utils/reportCharts';
 
 // Name of the Room & Bed Management screen in your navigator.
 const ROOMS_ROUTE = 'AdminRooms';
@@ -96,7 +99,8 @@ export default function AdminDashboardScreen() {
   const activeResidents = adminResidents.filter((r) => !isPreBookedNow(r));
   const totalResidents = activeResidents.length;
   // Same rule as the Rent tab and the Pending Dues screen: every resident whose rent is not Paid.
-  const pendingDuesList = computeDues(adminResidents, rooms, paymentRecords);
+  const { lateFeeRules } = useUpiSettings(activeProperty?.id);
+  const pendingDuesList = computeDues(adminResidents, rooms, paymentRecords, lateFeeRules);
   const pendingRent = pendingDuesList.length;
   const pendingAmount = pendingDuesList.reduce((s, d) => s + d.outstanding, 0);
   const openComplaints = adminComplaints.filter((c) => c.status === 'Open').length;
@@ -323,6 +327,10 @@ export default function AdminDashboardScreen() {
               </View>
             )}
           </TouchableOpacity>
+          {/* Admin settings: biometric lock, auto logout, account */}
+          <TouchableOpacity onPress={() => navigation.navigate('AdminSettings')}>
+            <Ionicons name="settings-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
           <TouchableOpacity onPress={confirmLogout}>
             <Ionicons name="log-out-outline" size={24} color={colors.error} />
           </TouchableOpacity>
@@ -380,6 +388,12 @@ export default function AdminDashboardScreen() {
             <Text style={[typography.caption, styles.cardLink]}>Collections →</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ---------------- Collection trend ---------------- */}
+        <ChartCard
+          spec={collectedByMonthChart(collectionRows(paymentRecords, 6))}
+          onPress={() => navigation.navigate('AdminRevenue')}
+        />
 
         {/* ---------------- Rooms & Availability ---------------- */}
         <View style={[styles.sectionHeaderRow, { marginTop: spacing.lg }]}>

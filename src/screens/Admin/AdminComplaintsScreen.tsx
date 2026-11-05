@@ -19,22 +19,22 @@ import { getFirestore, doc, getDoc } from '@react-native-firebase/firestore';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
-import { AdminComplaint, AdminResident } from '../../constants/mockData';
+import { AdminComplaint, AdminResident, COMPLAINT_STAGES, ComplaintStage, stageOf } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
 import ResidentAvatar from '../../components/common/ResidentAvatar';
 
 const statusColors: Record<string, { bg: string; text: string }> = {
-  Open: { bg: '#FEE2E2', text: colors.error },
+  Submitted: { bg: '#FEE2E2', text: colors.error },
+  'Under Review': { bg: '#FFEDD5', text: '#C2410C' },
+  Assigned: { bg: '#DBEAFE', text: '#2563EB' },
   'In Progress': { bg: '#FEF3C7', text: colors.warning },
   Resolved: { bg: '#D1FAE5', text: colors.success },
+  Closed: { bg: '#E5E7EB', text: '#6B7280' },
 };
 
-const nextStatus: Record<AdminComplaint['status'], AdminComplaint['status']> = {
-  Open: 'In Progress',
-  'In Progress': 'Resolved',
-  Resolved: 'Open',
-};
+const fmtAt = (ts: number) =>
+  new Date(ts).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 
 // Categories offered when an admin raises a complaint. Edit this list to match the
 // categories your residents see on their complaint screen.
@@ -64,8 +64,10 @@ function ComplaintCard({
   onOpen: () => void;
   onComment: (text: string) => void;
 }) {
-  const statusStyle = statusColors[complaint.status];
   const c: any = complaint;
+  const stage = stageOf(complaint);
+  const statusStyle = statusColors[stage];
+  const [showHistory, setShowHistory] = useState(false);
   const [replying, setReplying] = useState(false);
   const [reply, setReply] = useState<string>(c.adminComment ?? '');
   const isNew = complaint.status === 'Open' && !(complaint as any).viewed;
@@ -95,13 +97,19 @@ function ComplaintCard({
               activeOpacity={0.7}
             >
               <Text style={[typography.caption, { color: statusStyle.text }]}>
-                {complaint.status}
+                {stage}
               </Text>
             </TouchableOpacity>
           </View>
+          {!!c.title && (
+            <Text style={[typography.bodyBold, { color: colors.text, marginTop: 4 }]}>{c.title}</Text>
+          )}
           <Text style={[typography.caption, { color: colors.primary, marginTop: 4 }]}>
-            {complaint.category}
+            #{complaint.id.slice(-6).toUpperCase()} · {complaint.category}
           </Text>
+          {!!c.assignedTo && (
+            <Text style={[typography.caption, { color: colors.text, marginTop: 2 }]}>Assigned to: {c.assignedTo}</Text>
+          )}
           <Text style={[typography.body, { color: colors.textMuted, marginTop: 2 }]}>
             {complaint.description}
           </Text>
@@ -116,6 +124,23 @@ function ComplaintCard({
             {complaint.date}
             {c.reopenedOn ? `  ·  Reopened ${c.reopenedOn}` : ''}
           </Text>
+
+          {Array.isArray(c.history) && c.history.length > 0 && (
+            <View style={{ marginTop: spacing.xs }}>
+              <TouchableOpacity onPress={() => setShowHistory((v) => !v)} hitSlop={6}>
+                <Text style={[typography.caption, { color: colors.primary, fontWeight: '700' }]}>
+                  {showHistory ? 'Hide history' : `Status history (${c.history.length})`}
+                </Text>
+              </TouchableOpacity>
+              {showHistory &&
+                c.history.map((h: any, i: number) => (
+                  <Text key={`${h.stage}-${h.at}-${i}`} style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                    {h.stage} · {fmtAt(h.at)}
+                    {h.note ? ` · ${h.note}` : ''}
+                  </Text>
+                ))}
+            </View>
+          )}
 
           {/* Resident's satisfaction rating after the complaint was resolved */}
           {typeof c.rating === 'number' && (
@@ -182,7 +207,7 @@ function ComplaintCard({
 export default function AdminComplaintsScreen() {
   const route = useRoute<any>();
   const routeFilter: string | undefined = route.params?.filterStatus;
-  const { complaints, residents, rooms, properties, activeProperty, updateComplaintStatus, markComplaintViewed, addComplaint, clearComplaints, setComplaintComment } = useAdmin();
+  const { complaints, residents, rooms, properties, activeProperty, setComplaintStage, markComplaintViewed, addComplaint, clearComplaints, setComplaintComment } = useAdmin();
 
   const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [whatsappRecipients, setWhatsappRecipients] = useState<WhatsAppRecipient[]>([]);
@@ -192,8 +217,14 @@ export default function AdminComplaintsScreen() {
   const [residentSearch, setResidentSearch] = useState('');
   const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null);
   const [category, setCategory] = useState(COMPLAINT_CATEGORIES[0]);
+  const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
+
+  // ---- Change-status sheet ----
+  const [stageFor, setStageFor] = useState<AdminComplaint | null>(null);
+  const [stageSel, setStageSel] = useState<ComplaintStage>('Submitted');
+  const [staff, setStaff] = useState('');
 
   // ---- Ticket filters: All / New / Open / In Progress / Resolved ----
   type TicketFilter = 'All' | 'New' | 'Open' | 'In Progress' | 'Resolved';
@@ -245,6 +276,7 @@ export default function AdminComplaintsScreen() {
     setResidentSearch('');
     setSelectedResidentId(null);
     setCategory(COMPLAINT_CATEGORIES[0]);
+    setTitle('');
     setDescription('');
     setPhotos([]);
     setRaiseOpen(true);
@@ -310,6 +342,7 @@ export default function AdminComplaintsScreen() {
       residentName: resident.name,
       room: roomNumberOf(resident.roomId),
       category,
+      title: title.trim() || undefined,
       description: description.trim(),
       residentId: resident.id,
       propertyId: resident.propertyId,
@@ -352,55 +385,65 @@ export default function AdminComplaintsScreen() {
     ]);
   };
 
+  // Tapping the status badge opens a sheet: pick the new step and (optionally) who is assigned.
   const handleChangeStatus = (complaint: AdminComplaint) => {
-    const newStatus = nextStatus[complaint.status];
-    Alert.alert('Update Status', `Change status to "${newStatus}"?`, [
-      { text: 'Cancel', style: 'cancel' },
+    setStageSel(stageOf(complaint));
+    setStaff(((complaint as any).assignedTo as string) ?? '');
+    setStageFor(complaint);
+  };
+
+  const confirmStage = async () => {
+    const complaint = stageFor;
+    if (!complaint) return;
+    const newStage = stageSel;
+    const staffName = staff.trim();
+    if (newStage === 'Assigned' && !staffName) {
+      Alert.alert('Assign Someone', 'Enter the name of the staff member this complaint is assigned to.');
+      return;
+    }
+    setStageFor(null);
+    setComplaintStage(complaint.id, newStage, staffName || undefined);
+    if (!(complaint as any).viewed) markComplaintViewed(complaint.id);
+
+    const cAny = complaint as any;
+    const resident = findResident(complaint);
+    // Not in the loaded list (e.g. moved out / archived)? Read the record straight from Firestore.
+    let fetched: any = null;
+    if (!resident && cAny.residentId) {
+      try {
+        const snap: any = await getDoc(doc(getFirestore(), 'residents', cAny.residentId));
+        const ok = typeof snap.exists === 'function' ? snap.exists() : snap.exists;
+        if (ok) fetched = snap.data();
+      } catch {
+        // admin may not have access; fall through
+      }
+    }
+    const phone = resident?.phone || fetched?.phone || cAny.residentPhone || cAny.phone || '';
+    const pgName =
+      properties.find((p) => p.id === (resident?.propertyId || fetched?.propertyId || cAny.propertyId))?.name ??
+      activeProperty?.name ??
+      'your PG';
+    const what = cAny.title || complaint.category;
+
+    const stageMessages: Record<ComplaintStage, string> = {
+      Submitted: `Hi ${complaint.residentName}, your complaint (${what}) has been reopened. Our team will look into it.`,
+      'Under Review': `Hi ${complaint.residentName}, your complaint (${what}) is under review by our team.`,
+      Assigned: `Hi ${complaint.residentName}, your complaint (${what}) has been assigned to ${staffName || 'our staff'}. They will get in touch with you.`,
+      'In Progress': `Hi ${complaint.residentName}, your complaint (${what}) is now being worked on. We'll update you once resolved.`,
+      Resolved: `Hi ${complaint.residentName}, your complaint (${what}) has been marked as resolved. Please let us know if the issue persists. — ${pgName}`,
+      Closed: `Hi ${complaint.residentName}, your complaint (${what}) has been closed. Thank you for your patience. — ${pgName}`,
+    };
+
+    setWhatsappRecipients([
       {
-        text: 'Confirm',
-        onPress: async () => {
-          updateComplaintStatus(complaint.id, newStatus);
-          if (!(complaint as any).viewed) markComplaintViewed(complaint.id);
-
-          const cAny = complaint as any;
-          const resident = findResident(complaint);
-          // Not in the loaded list (e.g. moved out / archived)? Read the record straight from Firestore.
-          let fetched: any = null;
-          if (!resident && cAny.residentId) {
-            try {
-              const snap: any = await getDoc(doc(getFirestore(), 'residents', cAny.residentId));
-              const ok = typeof snap.exists === 'function' ? snap.exists() : snap.exists;
-              if (ok) fetched = snap.data();
-            } catch {
-              // admin may not have access; fall through
-            }
-          }
-          const phone = resident?.phone || fetched?.phone || cAny.residentPhone || cAny.phone || '';
-          const pgName =
-            properties.find((p) => p.id === (resident?.propertyId || fetched?.propertyId || cAny.propertyId))?.name ??
-            activeProperty?.name ??
-            'your PG';
-          if (__DEV__) console.log('[WhatsApp] complaint', complaint.id, 'resident found:', !!resident, 'fetched:', !!fetched, 'phone:', phone, 'keys:', Object.keys(cAny).join(','));
-
-          const statusMessages: Record<AdminComplaint['status'], string> = {
-            Open: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been reopened. Our team will look into it.`,
-            'In Progress': `Hi ${complaint.residentName}, your complaint (${complaint.category}) is now being worked on. We'll update you once resolved.`,
-            Resolved: `Hi ${complaint.residentName}, your complaint (${complaint.category}) has been marked as resolved. Please let us know if the issue persists. — ${pgName}`,
-          };
-
-          setWhatsappRecipients([
-            {
-              id: complaint.id,
-              name: complaint.residentName,
-              phone,
-              profileImageUri: resident?.profileImageUri ?? fetched?.profileImageUri ?? null,
-              message: statusMessages[newStatus],
-            },
-          ]);
-          setWhatsappVisible(true);
-        },
+        id: complaint.id,
+        name: complaint.residentName,
+        phone,
+        profileImageUri: resident?.profileImageUri ?? fetched?.profileImageUri ?? null,
+        message: stageMessages[newStage],
       },
     ]);
+    setWhatsappVisible(true);
   };
 
   return (
@@ -479,6 +522,54 @@ export default function AdminComplaintsScreen() {
         recipients={whatsappRecipients}
       />
 
+      {/* Change status / assign staff */}
+      <Modal visible={!!stageFor} transparent animationType="fade" onRequestClose={() => setStageFor(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[typography.heading3, { color: colors.text }]}>Update Status</Text>
+              <Text style={[typography.caption, { color: colors.textMuted, marginBottom: spacing.sm }]}>
+                {stageFor?.residentName} · {(stageFor as any)?.title || stageFor?.category}
+              </Text>
+              <View style={styles.chipWrap}>
+                {COMPLAINT_STAGES.map((st) => {
+                  const on = stageSel === st;
+                  return (
+                    <TouchableOpacity
+                      key={st}
+                      style={[styles.chip, on && styles.chipActive]}
+                      onPress={() => setStageSel(st)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[typography.caption, { color: on ? colors.white : colors.text }]}>{st}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.formLabel}>Assigned to{stageSel === 'Assigned' ? ' *' : ' (optional)'}</Text>
+              <TextInput
+                style={styles.input}
+                value={staff}
+                onChangeText={setStaff}
+                placeholder="Staff member name"
+                placeholderTextColor={colors.textMuted}
+                maxLength={60}
+              />
+
+              <View style={styles.formFooter}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setStageFor(null)}>
+                  <Text style={[typography.button, { color: colors.text }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveBtn} onPress={confirmStage}>
+                  <Text style={[typography.button, { color: colors.white }]}>Update</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* Raise a complaint on behalf of a resident */}
       <Modal visible={raiseOpen} transparent animationType="fade" onRequestClose={() => setRaiseOpen(false)}>
         <View style={styles.modalOverlay}>
@@ -537,6 +628,16 @@ export default function AdminComplaintsScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <Text style={styles.formLabel}>Title</Text>
+              <TextInput
+                style={styles.input}
+                value={title}
+                onChangeText={setTitle}
+                placeholder="Short summary (optional)"
+                placeholderTextColor={colors.textMuted}
+                maxLength={80}
+              />
 
               <Text style={styles.formLabel}>Details *</Text>
               <TextInput

@@ -16,6 +16,7 @@ import { ResidentProvider } from './src/context/ResidentContext';
 import { PaymentMethodsProvider } from './src/context/PaymentMethodsContext';
 import { CommunicationsProvider } from './src/context/CommunicationsContext';
 import InactivityGuard from './src/components/common/InactivityGuard';
+import BiometricGate from './src/components/common/BiometricGate';
 import { useAppSettings } from './src/utils/appSettings';
 import { colors } from './src/constants/colors';
 
@@ -84,7 +85,9 @@ export default function App() {
                               <DeletedResidentWatcher />
                               <NotificationScheduler />
                               <InactivityGuard>
-                                <AppNavigator />
+                                <BiometricGate>
+                                  <AppNavigator />
+                                </BiometricGate>
                               </InactivityGuard>
                             </PaymentMethodsProvider>
                           </DocumentsProvider>

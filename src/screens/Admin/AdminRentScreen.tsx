@@ -14,11 +14,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { AdminResident } from '../../constants/mockData';
 import { useAdmin } from '../../context/AdminContext';
+import { useAdminUpiPayments, useUpiSettings } from '../../hooks/useUpiPayments';
+import { computeLateFee } from '../../utils/lateFee';
+import { parseDue } from '../../utils/dues';
 import WhatsAppNotifyModal, { WhatsAppRecipient } from '../../components/admin/WhatsAppNotifyModal';
 import ResidentAvatar from '../../components/common/ResidentAvatar';
 import { formatPhoneDisplay } from '../../utils/phone';
@@ -40,28 +44,36 @@ function RentRow({
   roomNumber,
   deduction,
   deductionReason,
+  lateFee,
+  lateFeeWaived,
   paidAmount,
   hideRoom,
   onMarkPaid,
   onDeduction,
+  onWaive,
 }: {
   resident: AdminResident;
   roomNumber: string | undefined;
   deduction: number;
   deductionReason?: string | null;
+  /** Late fee on this month's rent (0 when none or already paid) and whether the admin waived it. */
+  lateFee: number;
+  lateFeeWaived: boolean;
   /** Amount actually collected when this month's rent is already paid (already after the deduction). */
   paidAmount?: number | null;
   hideRoom?: boolean;
   onMarkPaid: () => void;
   onDeduction: () => void;
+  onWaive: () => void;
 }) {
   const statusStyle = statusColors[resident.rentStatus] ?? statusColors.Pending;
   const isPaidRow = paidAmount != null;
   // A paid record already holds the amount after the deduction, so it is not deducted a second time.
-  const net = isPaidRow ? paidAmount! : Math.max(0, resident.monthlyRent - deduction);
+  const net = isPaidRow ? paidAmount! : Math.max(0, resident.monthlyRent - deduction) + lateFee;
   const gross = isPaidRow ? paidAmount! + deduction : resident.monthlyRent;
   return (
     <View style={styles.card}>
+      <View style={styles.topRow}>
       <ResidentAvatar uri={resident.profileImageUri} name={resident.name} size={40} />
       <View style={styles.left}>
         <Text style={[typography.bodyBold, { color: colors.text }]}>{resident.name}</Text>
@@ -93,6 +105,27 @@ function RentRow({
           </Text>
         </TouchableOpacity>
         )}
+        {!isPaidRow && (lateFee > 0 || lateFeeWaived) && (
+          <TouchableOpacity
+            style={[styles.deductionBtn, lateFeeWaived ? styles.deductionBtnOn : { borderColor: colors.error }]}
+            activeOpacity={0.8}
+            onPress={onWaive}
+          >
+            <Ionicons
+              name={lateFeeWaived ? 'refresh-outline' : 'alarm-outline'}
+              size={14}
+              color={lateFeeWaived ? colors.primary : colors.error}
+            />
+            <Text
+              style={[
+                typography.caption,
+                { color: lateFeeWaived ? colors.primary : colors.error, fontWeight: '700', marginLeft: 4 },
+              ]}
+            >
+              {lateFeeWaived ? 'Late fee waived · Restore' : `Late fee ${money(lateFee)} · Waive`}
+            </Text>
+          </TouchableOpacity>
+        )}
         {!!deductionReason && deduction > 0 && (
           <View style={styles.noteRow}>
             <Ionicons name="document-text-outline" size={13} color={colors.textMuted} />
@@ -110,6 +143,9 @@ function RentRow({
             {`  −${money(deduction)}`}
           </Text>
         )}
+      </View>
+      </View>
+      <View style={styles.statusRow}>
         {resident.rentStatus === 'Paid' ? (
           <View style={[styles.badge, { backgroundColor: statusStyle.bg }]}>
             <Text style={[typography.caption, { color: statusStyle.text }]}>Paid</Text>
@@ -131,7 +167,11 @@ function RentRow({
 }
 
 export default function AdminRentScreen() {
-  const { residents, markRentPaid, setRentDeduction, rooms, paymentRecords, properties } = useAdmin();
+  const navigation = useNavigation<any>();
+  const { pending: pendingUpi } = useAdminUpiPayments();
+  const { residents, markRentPaid, setRentDeduction, setLateFeeWaiver, rooms, paymentRecords, properties, activePropertyId } =
+    useAdmin();
+  const { lateFeeRules } = useUpiSettings(activePropertyId);
   const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
@@ -153,7 +193,16 @@ export default function AdminRentScreen() {
   }, [paymentRecords]);
 
   const deductionOf = (r: AdminResident) => Number((recordOf.get(r.id) as any)?.deduction ?? 0) || 0;
-  const netRentOf = (r: AdminResident) => Math.max(0, r.monthlyRent - deductionOf(r));
+  const lateFeeWaivedOf = (r: AdminResident) => !!(recordOf.get(r.id) as any)?.lateFeeWaived;
+  // Late fee for this month's rent. Already-paid rent keeps whatever was collected, so it shows 0 here.
+  const lateFeeOf = (r: AdminResident) => {
+    const rec = recordOf.get(r.id);
+    if (r.rentStatus === 'Paid' || rec?.status === 'Paid') return 0;
+    const now = new Date();
+    const due = parseDue(rec?.dueDate) ?? new Date(now.getFullYear(), now.getMonth(), r.rentDueDay || 5);
+    return computeLateFee(due, now, lateFeeRules, lateFeeWaivedOf(r));
+  };
+  const netRentOf = (r: AdminResident) => Math.max(0, r.monthlyRent - deductionOf(r)) + lateFeeOf(r);
 
   const paidResidents = residents.filter((r) => r.rentStatus === 'Paid');
   const totalCollected = paidResidents.reduce((sum, r) => {
@@ -195,15 +244,29 @@ export default function AdminRentScreen() {
 
   const handleMarkPaid = (resident: AdminResident) => {
     const ded = deductionOf(resident);
+    const fee = lateFeeOf(resident);
     Alert.alert(
       'Mark Rent as Paid',
       `Confirm ${money(netRentOf(resident))} received from ${resident.name}?` +
-        (ded > 0 ? `\n\n(Rent ${money(resident.monthlyRent)} − deduction ${money(ded)})` : ''),
+        (ded > 0 || fee > 0
+          ? `\n\n(Rent ${money(resident.monthlyRent)}${ded > 0 ? ` − deduction ${money(ded)}` : ''}${fee > 0 ? ` + late fee ${money(fee)}` : ''})`
+          : ''),
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Confirm', onPress: () => markRentPaid(resident.id) },
+        { text: 'Confirm', onPress: () => markRentPaid(resident.id, fee) },
       ]
     );
+  };
+
+  const toggleWaive = (r: AdminResident) => {
+    if (lateFeeWaivedOf(r)) {
+      setLateFeeWaiver(r.id, false);
+      return;
+    }
+    Alert.alert('Waive late fee?', `${r.name} will pay only the rent for ${currentMonthLabel()}, without the ${money(lateFeeOf(r))} late fee.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Waive', onPress: () => setLateFeeWaiver(r.id, true, 'Waived by admin') },
+    ]);
   };
 
   const reminderRecipients: WhatsAppRecipient[] = pendingResidents.map((r) => {
@@ -268,6 +331,9 @@ export default function AdminRentScreen() {
       roomNumber={rooms.find((r) => r.id === item.roomId)?.roomNumber}
       deduction={deductionOf(item)}
       deductionReason={(recordOf.get(item.id) as any)?.deductionReason}
+      lateFee={lateFeeOf(item)}
+      lateFeeWaived={lateFeeWaivedOf(item)}
+      onWaive={() => toggleWaive(item)}
       paidAmount={
         item.rentStatus === 'Paid' && recordOf.get(item.id)?.status === 'Paid'
           ? Number(recordOf.get(item.id)?.amount) || 0
@@ -297,6 +363,21 @@ export default function AdminRentScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={[typography.heading2, { color: colors.text }]}>Rent Overview</Text>
+        <TouchableOpacity
+          style={[styles.verifyButton, pendingUpi.length > 0 && styles.verifyButtonOn]}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('AdminPaymentVerification')}
+        >
+          <Ionicons name="shield-checkmark-outline" size={16} color={pendingUpi.length > 0 ? colors.white : colors.primary} />
+          <Text
+            style={[
+              typography.caption,
+              { color: pendingUpi.length > 0 ? colors.white : colors.primary, fontWeight: '700', marginLeft: 6 },
+            ]}
+          >
+            {pendingUpi.length > 0 ? `Verify UPI Payments (${pendingUpi.length} waiting)` : 'UPI Payments & Settings'}
+          </Text>
+        </TouchableOpacity>
         {pendingResidents.length > 0 && (
           <TouchableOpacity style={styles.reminderButton} activeOpacity={0.85} onPress={() => setWhatsappVisible(true)}>
             <Ionicons name="logo-whatsapp" size={16} color={colors.white} />
@@ -491,6 +572,17 @@ export default function AdminRentScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { paddingHorizontal: spacing.md, paddingTop: spacing.md },
+  verifyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  verifyButtonOn: { backgroundColor: colors.warning, borderColor: colors.warning },
   reminderButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -564,9 +656,6 @@ const styles = StyleSheet.create({
   },
   roomPendingBadge: { backgroundColor: '#FEF3C7', paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full },
   card: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.md,
@@ -574,9 +663,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  left: { flex: 1, marginLeft: spacing.sm },
-  right: { alignItems: 'flex-end' },
-  badge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full, marginTop: 4 },
+  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  left: { flex: 1, marginLeft: spacing.sm, marginRight: spacing.sm },
+  right: { alignItems: 'flex-end', flexShrink: 0 },
+  statusRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: spacing.xs },
+  badge: { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
   deductionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
