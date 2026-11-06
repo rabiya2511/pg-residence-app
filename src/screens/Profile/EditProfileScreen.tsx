@@ -22,24 +22,39 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useResident } from '../../context/ResidentContext';
 
+// Keeps digits only, drops a pasted +91 / 0 prefix, and never allows more than 10 digits.
+function cleanPhone(text: string): string {
+  let d = text.replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d.slice(0, 10);
+}
+
+// A valid Indian mobile number: 10 digits, starting with 6, 7, 8 or 9.
+const isValidMobile = (v: string) => /^[6-9]\d{9}$/.test(v);
+
 function Field({
   label,
   value,
   onChangeText,
   placeholder,
   keyboardType,
+  helper,
+  invalid,
 }: {
   label: string;
   value: string;
   onChangeText: (text: string) => void;
   placeholder: string;
   keyboardType?: 'default' | 'phone-pad' | 'numeric' | 'email-address';
+  helper?: string;
+  invalid?: boolean;
 }) {
   return (
     <View style={styles.field}>
       <Text style={[typography.caption, styles.label]}>{label}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, invalid && { borderColor: colors.error }]}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -47,8 +62,21 @@ function Field({
         keyboardType={keyboardType ?? 'default'}
         autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
       />
+      {!!helper && (
+        <Text style={[typography.caption, { color: invalid ? colors.error : colors.textMuted, marginTop: 4 }]}>
+          {helper}
+        </Text>
+      )}
     </View>
   );
+}
+
+// Helper line for an optional 10-digit mobile field.
+function phoneHelper(v: string): { helper: string; invalid: boolean } {
+  if (v.length === 0) return { helper: '10-digit mobile number (optional)', invalid: false };
+  if (v.length < 10) return { helper: `${v.length}/10 digits`, invalid: true };
+  if (!isValidMobile(v)) return { helper: 'A mobile number starts with 6, 7, 8 or 9', invalid: true };
+  return { helper: '10/10 digits', invalid: false };
 }
 
 export default function EditProfileScreen() {
@@ -64,8 +92,9 @@ export default function EditProfileScreen() {
   const [occupation, setOccupation] = useState(residentData.occupation);
   const [occupationAddress, setOccupationAddress] = useState(residentData.occupationAddress);
   const [nativePlace, setNativePlace] = useState(residentData.nativePlace);
-  const [emergencyContact1, setEmergencyContact1] = useState(residentData.emergencyContact1);
-  const [emergencyContact2, setEmergencyContact2] = useState(residentData.emergencyContact2);
+  // Older numbers saved as "+91 98765 43210" are shown as plain 10 digits.
+  const [emergencyContact1, setEmergencyContact1] = useState(cleanPhone(residentData.emergencyContact1 ?? ''));
+  const [emergencyContact2, setEmergencyContact2] = useState(cleanPhone(residentData.emergencyContact2 ?? ''));
   const [companyIdProofUri, setCompanyIdProofUri] = useState<string | null>(residentData.companyIdProofUri);
   const [photoOptionsVisible, setPhotoOptionsVisible] = useState(false);
   const [idProofOptionsVisible, setIdProofOptionsVisible] = useState(false);
@@ -157,6 +186,22 @@ export default function EditProfileScreen() {
       return;
     }
 
+    // Emergency contacts are optional, but when filled they must be a full 10-digit mobile number.
+    if (emergencyContact1 && !isValidMobile(emergencyContact1)) {
+      Alert.alert(
+        'Invalid Emergency Contact 1',
+        'Enter a 10-digit mobile number starting with 6, 7, 8 or 9, or leave it empty.'
+      );
+      return;
+    }
+    if (emergencyContact2 && !isValidMobile(emergencyContact2)) {
+      Alert.alert(
+        'Invalid Emergency Contact 2',
+        'Enter a 10-digit mobile number starting with 6, 7, 8 or 9, or leave it empty.'
+      );
+      return;
+    }
+
     updateResidentData({
       name: name.trim(),
       phone: phone.trim(),
@@ -167,8 +212,8 @@ export default function EditProfileScreen() {
       occupation: occupation.trim(),
       occupationAddress: occupationAddress.trim(),
       nativePlace: nativePlace.trim(),
-      emergencyContact1: emergencyContact1.trim(),
-      emergencyContact2: emergencyContact2.trim(),
+      emergencyContact1,
+      emergencyContact2,
       companyIdProofUri,
     });
 
@@ -176,6 +221,9 @@ export default function EditProfileScreen() {
       { text: 'OK', onPress: () => navigation.goBack() },
     ]);
   };
+
+  const ec1 = phoneHelper(emergencyContact1);
+  const ec2 = phoneHelper(emergencyContact2);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -191,7 +239,7 @@ export default function EditProfileScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <View style={styles.avatarSection}>
             <TouchableOpacity
               style={styles.avatarWrap}
@@ -225,16 +273,20 @@ export default function EditProfileScreen() {
           <Field
             label="Emergency Contact 1"
             value={emergencyContact1}
-            onChangeText={setEmergencyContact1}
-            placeholder="+91 XXXXX XXXXX"
+            onChangeText={(t) => setEmergencyContact1(cleanPhone(t))}
+            placeholder="10-digit mobile number"
             keyboardType="phone-pad"
+            helper={ec1.helper}
+            invalid={ec1.invalid}
           />
           <Field
             label="Emergency Contact 2"
             value={emergencyContact2}
-            onChangeText={setEmergencyContact2}
-            placeholder="+91 XXXXX XXXXX"
+            onChangeText={(t) => setEmergencyContact2(cleanPhone(t))}
+            placeholder="10-digit mobile number"
             keyboardType="phone-pad"
+            helper={ec2.helper}
+            invalid={ec2.invalid}
           />
 
           <Text style={[typography.caption, styles.label, { marginTop: spacing.sm }]}>Company ID Proof</Text>

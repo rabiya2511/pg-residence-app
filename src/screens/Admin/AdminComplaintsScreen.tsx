@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,15 @@ import {
   TextInput,
   ScrollView,
   Image,
+  useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { getFirestore, doc, getDoc } from '@react-native-firebase/firestore';
 import { colors } from '../../constants/colors';
 import { spacing, radius } from '../../constants/spacing';
@@ -57,12 +61,14 @@ function ComplaintCard({
   onChangeStatus,
   onOpen,
   onComment,
+  onOpenPhoto,
 }: {
   complaint: AdminComplaint;
   resident?: AdminResident;
   onChangeStatus: () => void;
   onOpen: () => void;
   onComment: (text: string) => void;
+  onOpenPhoto: (photos: string[], index: number) => void;
 }) {
   const c: any = complaint;
   const stage = stageOf(complaint);
@@ -115,8 +121,14 @@ function ComplaintCard({
           </Text>
           {Array.isArray((complaint as any).photos) && (complaint as any).photos.length > 0 && (
             <View style={styles.cardPhotoRow}>
-              {(complaint as any).photos.map((u: string) => (
-                <Image key={u} source={{ uri: u }} style={styles.cardPhoto} />
+              {(complaint as any).photos.map((u: string, i: number) => (
+                <TouchableOpacity
+                  key={u}
+                  activeOpacity={0.85}
+                  onPress={() => onOpenPhoto((complaint as any).photos, i)}
+                >
+                  <Image source={{ uri: u }} style={styles.cardPhoto} />
+                </TouchableOpacity>
               ))}
             </View>
           )}
@@ -204,6 +216,100 @@ function ComplaintCard({
   );
 }
 
+// One full-size photo with a loading spinner and a fallback if it cannot be loaded.
+function ViewerImage({ uri, width, height }: { uri: string; width: number; height: number }) {
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  return (
+    <View style={{ width, height, alignItems: 'center', justifyContent: 'center' }}>
+      {failed ? (
+        <View style={{ alignItems: 'center' }}>
+          <Ionicons name="alert-circle-outline" size={40} color="#fff" />
+          <Text style={{ color: '#fff', marginTop: 6 }}>Can't load this photo</Text>
+        </View>
+      ) : (
+        <Image
+          source={{ uri }}
+          style={{ width, height }}
+          resizeMode="contain"
+          onLoadEnd={() => setLoading(false)}
+          onError={() => {
+            setFailed(true);
+            setLoading(false);
+          }}
+        />
+      )}
+      {loading && !failed && <ActivityIndicator style={StyleSheet.absoluteFill} color="#fff" />}
+    </View>
+  );
+}
+
+// Full-screen viewer: swipe left/right between photos, download or share the current one.
+function PhotoViewer({
+  viewer,
+  onClose,
+}: {
+  viewer: { photos: string[]; index: number } | null;
+  onClose: () => void;
+}) {
+  const { width, height } = useWindowDimensions();
+  const scrollRef = useRef<ScrollView>(null);
+  const [page, setPage] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!viewer) return;
+    setPage(viewer.index);
+    const t = setTimeout(() => scrollRef.current?.scrollTo({ x: viewer.index * width, animated: false }), 50);
+    return () => clearTimeout(t);
+  }, [viewer, width]);
+
+  const share = async () => {
+    const uri = viewer?.photos[page];
+    if (!uri) return;
+    try {
+      setSaving(true);
+      const res = await FileSystem.downloadAsync(uri, `${FileSystem.cacheDirectory}complaint_photo_${Date.now()}.jpg`);
+      if (res.status && res.status >= 400) throw new Error(`HTTP ${res.status}`);
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(res.uri, { mimeType: 'image/jpeg' });
+    } catch (e: any) {
+      console.warn('photo download failed:', e?.message ?? e);
+      Alert.alert('Could Not Download', 'Check your internet connection and try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal visible={!!viewer} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.viewerOverlay}>
+        <View style={styles.viewerBar}>
+          <Text style={[typography.bodyBold, { color: '#fff', flex: 1 }]}>
+            {viewer ? `${page + 1} / ${viewer.photos.length}` : ''}
+          </Text>
+          <TouchableOpacity onPress={share} style={styles.viewerBtn} disabled={saving}>
+            {saving ? <ActivityIndicator color="#fff" /> : <Ionicons name="download-outline" size={24} color="#fff" />}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onClose} style={styles.viewerBtn}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={(e) => setPage(Math.round(e.nativeEvent.contentOffset.x / width))}
+        >
+          {(viewer?.photos ?? []).map((u) => (
+            <ViewerImage key={u} uri={u} width={width} height={height - 130} />
+          ))}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 export default function AdminComplaintsScreen() {
   const route = useRoute<any>();
   const routeFilter: string | undefined = route.params?.filterStatus;
@@ -211,6 +317,9 @@ export default function AdminComplaintsScreen() {
 
   const [whatsappVisible, setWhatsappVisible] = useState(false);
   const [whatsappRecipients, setWhatsappRecipients] = useState<WhatsAppRecipient[]>([]);
+
+  // ---- Full-screen photo viewer ----
+  const [viewer, setViewer] = useState<{ photos: string[]; index: number } | null>(null);
 
   // ---- "Raise complaint" form ----
   const [raiseOpen, setRaiseOpen] = useState(false);
@@ -506,6 +615,7 @@ export default function AdminComplaintsScreen() {
             onOpen={() => {
               if (!(item as any).viewed) markComplaintViewed(item.id);
             }}
+            onOpenPhoto={(photoList, index) => setViewer({ photos: photoList, index })}
           />
         )}
         ListEmptyComponent={
@@ -694,6 +804,9 @@ export default function AdminComplaintsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Full-screen view of a complaint photo */}
+      <PhotoViewer viewer={viewer} onClose={() => setViewer(null)} />
     </SafeAreaView>
   );
 }
@@ -938,4 +1051,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingVertical: spacing.sm,
   },
+
+  // Full-screen photo viewer
+  viewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' },
+  viewerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.sm,
+  },
+  viewerBtn: { padding: spacing.sm },
 });

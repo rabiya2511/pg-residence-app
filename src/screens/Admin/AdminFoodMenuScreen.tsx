@@ -14,6 +14,10 @@ import { DEFAULT_TIMINGS } from '../../context/FoodContext';
 const MEALS = ['Breakfast', 'Lunch', 'Dinner'];
 type Draft = Record<string, Record<string, string>>; // day -> meal -> items, one per line
 
+type Published = { draft: Draft; timings: Record<string, string>; note: string };
+
+const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
+
 const sampleDraft = (): Draft => {
   const d: Draft = {};
   (weeklyMenu as any[]).forEach((m) => {
@@ -28,6 +32,20 @@ const sampleDraft = (): Draft => {
   return d;
 };
 
+// A text fingerprint of the menu, ignoring spaces and empty lines, so it matches what is saved.
+const menuKey = (d: Draft) =>
+  (weekDays as string[])
+    .map((day) =>
+      MEALS.map((m) =>
+        (d[day]?.[m] ?? '')
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .join('|')
+      ).join('||')
+    )
+    .join('###');
+
 export default function AdminFoodMenuScreen() {
   const navigation = useNavigation<any>();
   const { activePropertyId, activeProperty } = useAdmin();
@@ -41,9 +59,16 @@ export default function AdminFoodMenuScreen() {
   const [feedback, setFeedback] = useState<any[]>([]);
   const seeded = useRef(false);
 
+  // What is currently published (the last saved menu). "Reset" goes back to this.
+  const [published, setPublished] = useState<Published | null>(null);
+  // The menu as it was just before "Copy to all days", so the copy can be undone.
+  const [beforeCopy, setBeforeCopy] = useState<Draft | null>(null);
+
   // Load what is already published for this property.
   useEffect(() => {
     setLoaded(false);
+    setPublished(null);
+    setBeforeCopy(null);
     seeded.current = false;
     if (!activePropertyId) return;
     return onSnapshot(
@@ -66,9 +91,12 @@ export default function AdminFoodMenuScreen() {
             })
           );
         }
+        const loadedTimings = { ...DEFAULT_TIMINGS, ...(data?.timings ?? {}) };
+        const loadedNote = data?.note ?? '';
         setDraft(base);
-        setTimings({ ...DEFAULT_TIMINGS, ...(data?.timings ?? {}) });
-        setNote(data?.note ?? '');
+        setTimings(loadedTimings);
+        setNote(loadedNote);
+        setPublished({ draft: clone(base), timings: clone(loadedTimings), note: loadedNote });
         setLoaded(true);
       },
       (e: any) => console.warn('admin food menu listener:', e?.code)
@@ -89,22 +117,75 @@ export default function AdminFoodMenuScreen() {
     [feedback]
   );
 
+  // True when the screen differs from what residents currently see.
+  const dirty = useMemo(() => {
+    if (!published) return false;
+    const timingsKey = (t: Record<string, string>) => MEALS.map((m) => (t[m] ?? '').trim()).join('|');
+    return (
+      menuKey(draft) !== menuKey(published.draft) ||
+      timingsKey(timings) !== timingsKey(published.timings) ||
+      note.trim() !== (published.note ?? '').trim()
+    );
+  }, [draft, timings, note, published]);
+
+  // Leaving the screen with unpublished changes asks first.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
+      if (!dirty) return;
+      e.preventDefault();
+      Alert.alert('Discard changes?', 'You have menu changes that are not published yet.', [
+        { text: 'Keep editing', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: () => navigation.dispatch(e.data.action) },
+      ]);
+    });
+    return unsubscribe;
+  }, [navigation, dirty]);
+
   const setItems = (meal: string, value: string) =>
     setDraft((p) => ({ ...p, [day]: { ...(p[day] ?? {}), [meal]: value } }));
 
   const copyToAll = () =>
-    Alert.alert('Copy to all days', `Use ${day}'s menu for every day of the week?`, [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(
+      'Copy to all days',
+      `Use ${day}'s menu for every day of the week? The other days' menus are replaced on this screen. You can undo it before you publish.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Copy',
+          onPress: () => {
+            setBeforeCopy(clone(draft)); // keep the day-wise menu so Undo can bring it back
+            setDraft((p) => {
+              const next: Draft = {};
+              (weekDays as string[]).forEach((d) => (next[d] = { ...(p[day] ?? {}) }));
+              return next;
+            });
+          },
+        },
+      ]
+    );
+
+  const undoCopy = () => {
+    if (!beforeCopy) return;
+    setDraft(beforeCopy);
+    setBeforeCopy(null);
+  };
+
+  const resetToPublished = () => {
+    if (!published) return;
+    Alert.alert('Reset to published menu', 'All changes you have not published will be lost.', [
+      { text: 'Keep editing', style: 'cancel' },
       {
-        text: 'Copy',
-        onPress: () =>
-          setDraft((p) => {
-            const next: Draft = {};
-            (weekDays as string[]).forEach((d) => (next[d] = { ...(p[day] ?? {}) }));
-            return next;
-          }),
+        text: 'Reset',
+        style: 'destructive',
+        onPress: () => {
+          setDraft(clone(published.draft));
+          setTimings(clone(published.timings));
+          setNote(published.note);
+          setBeforeCopy(null);
+        },
       },
     ]);
+  };
 
   const save = () => {
     if (!activePropertyId) return;
@@ -125,7 +206,12 @@ export default function AdminFoodMenuScreen() {
       note: note.trim(),
       updatedAt: Date.now(),
     })
-      .then(() => Alert.alert('Published', 'Residents will see the new menu right away.'))
+      .then(() => {
+        // This is now the published menu: Reset goes back to it, and an old Undo no longer applies.
+        setPublished({ draft: clone(draft), timings: clone(timings), note: note.trim() });
+        setBeforeCopy(null);
+        Alert.alert('Published', 'Residents will see the new menu right away.');
+      })
       .catch((e: any) => Alert.alert('Could not save', e?.code ?? 'Please try again.'));
   };
 
@@ -145,6 +231,18 @@ export default function AdminFoodMenuScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {dirty && (
+          <View style={styles.dirtyBanner}>
+            <Ionicons name="alert-circle-outline" size={18} color={colors.warning} />
+            <Text style={[typography.caption, { color: colors.text, marginLeft: 8, flex: 1 }]}>
+              You have changes that are not published yet.
+            </Text>
+            <TouchableOpacity onPress={resetToPublished} activeOpacity={0.8} hitSlop={8}>
+              <Text style={[typography.caption, { color: colors.error, fontWeight: '700' }]}>Reset</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <Text style={[typography.bodyBold, styles.label]}>Special announcement (optional)</Text>
         <TextInput
           style={[styles.input, { minHeight: 60 }]}
@@ -200,12 +298,32 @@ export default function AdminFoodMenuScreen() {
           </View>
         ))}
 
-        <TouchableOpacity onPress={copyToAll} style={styles.secondaryButton} activeOpacity={0.8}>
-          <Ionicons name="copy-outline" size={16} color={colors.primary} />
-          <Text style={[typography.caption, { color: colors.primary, fontWeight: '600', marginLeft: 6 }]}>
-            Copy {day} to all days
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.actionRow}>
+          <TouchableOpacity onPress={copyToAll} style={styles.secondaryButton} activeOpacity={0.8}>
+            <Ionicons name="copy-outline" size={16} color={colors.primary} />
+            <Text style={[typography.caption, { color: colors.primary, fontWeight: '600', marginLeft: 6 }]}>
+              Copy {day} to all days
+            </Text>
+          </TouchableOpacity>
+
+          {!!beforeCopy && (
+            <TouchableOpacity onPress={undoCopy} style={styles.undoButton} activeOpacity={0.8}>
+              <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
+              <Text style={[typography.caption, { color: colors.warning, fontWeight: '700', marginLeft: 6 }]}>
+                Undo copy
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {dirty && (
+            <TouchableOpacity onPress={resetToPublished} style={styles.resetButton} activeOpacity={0.8}>
+              <Ionicons name="refresh-outline" size={16} color={colors.error} />
+              <Text style={[typography.caption, { color: colors.error, fontWeight: '700', marginLeft: 6 }]}>
+                Reset to published
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         <TouchableOpacity
           onPress={save}
@@ -272,7 +390,37 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  secondaryButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginBottom: spacing.md },
+  dirtyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
+  secondaryButton: { flexDirection: 'row', alignItems: 'center' },
+  undoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.warning,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  resetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.error,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
   saveButton: { backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center' },
   feedbackCard: {
     backgroundColor: colors.surface,

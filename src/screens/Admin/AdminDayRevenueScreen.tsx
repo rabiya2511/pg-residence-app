@@ -21,7 +21,7 @@ function GuestRow({ guest, onPress }: { guest: AdminDailyGuest; onPress: () => v
       <View style={styles.content}>
         <Text style={[typography.bodyBold, { color: colors.text }]}>{guest.name}</Text>
         <Text style={[typography.caption, { color: paid ? colors.success : colors.warning }]}>
-          {guest.paymentStatus}
+          {guest.paymentStatus} · Check-in {guest.checkInDate}
         </Text>
       </View>
       <Text style={[typography.bodyBold, { color: colors.success }]}>
@@ -38,7 +38,7 @@ export default function AdminDayRevenueScreen() {
   // Only today's records. Earlier days are closed automatically.
   const todaysGuests = dailyGuests
     .filter(isTodayRevenueGuest)
-    .sort((a, b) => b.checkInTimestamp - a.checkInTimestamp);
+    .sort((a, b) => ((b as any).createdAt ?? b.checkInTimestamp) - ((a as any).createdAt ?? a.checkInTimestamp));
   const todayTotal = todaysGuests.reduce((sum, g) => sum + guestCollected(g), 0);
   const todayLabel = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -88,7 +88,7 @@ export default function AdminDayRevenueScreen() {
           ₹{todayTotal.toLocaleString()}
         </Text>
         <Text style={[typography.caption, { color: colors.white, opacity: 0.85, marginTop: 4 }]}>
-          {todaysGuests.length} guest{todaysGuests.length !== 1 ? 's' : ''} today · earlier days are closed automatically
+          {todaysGuests.length} guest{todaysGuests.length !== 1 ? 's' : ''} paid today · earlier days are closed automatically
         </Text>
       </View>
 
@@ -99,7 +99,7 @@ export default function AdminDayRevenueScreen() {
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <Text style={[typography.body, { color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }]}>
-            No day-guest revenue today.
+            No day-guest payments received today.
           </Text>
         }
         renderItem={({ item }) => (

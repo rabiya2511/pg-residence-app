@@ -214,8 +214,10 @@ export function useAdminIssuedDocuments() {
         message:
           e?.code === 'timeout'
             ? 'The upload is taking too long. Check your connection and try again.'
+            : e?.code === 'file-too-large'
+            ? 'This file is too big. PDFs must be 600 KB or smaller; photos are shrunk automatically.'
             : e?.code === 'firestore/permission-denied' || e?.code === 'storage/unauthorized'
-            ? 'Not allowed. Publish the latest Firestore and Storage rules and try again.'
+            ? 'Not allowed. Publish the latest Firestore rules and try again.'
             : 'Could not send the document. Check your connection and try again.',
       };
     } finally {

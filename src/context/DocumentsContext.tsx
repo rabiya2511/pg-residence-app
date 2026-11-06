@@ -91,6 +91,8 @@ export function DocumentsProvider({ children }: { children: ReactNode }) {
         message:
           e?.code === 'timeout'
             ? 'The upload is taking too long. Check your connection and try again.'
+            : e?.code === 'file-too-large'
+            ? 'This file is too big. PDFs must be 600 KB or smaller.'
             : e?.code === 'storage/unauthorized' || e?.code === 'firestore/permission-denied'
             ? 'You are not allowed to upload this document. Please contact your PG admin.'
             : 'Could not upload the document. Check your connection and try again.',

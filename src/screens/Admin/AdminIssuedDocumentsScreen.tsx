@@ -13,8 +13,9 @@ import { spacing, radius } from '../../constants/spacing';
 import { typography } from '../../constants/typography';
 import { useAdmin } from '../../context/AdminContext';
 import { useAdminIssuedDocuments, DOC_CATEGORIES, docStatus, DocGroup } from '../../hooks/useIssuedDocuments';
+import { openStoredFile } from '../../utils/openStoredFile';
 
-const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_BYTES = 650 * 1024; // PDFs only; photos are shrunk automatically
 const fmt = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 const sizeLabel = (n?: number) => (n ? `${(n / 1024 / 1024).toFixed(1)} MB` : '');
 
@@ -70,8 +71,8 @@ export default function AdminIssuedDocumentsScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       const a = result.assets[0];
-      if (a.size && a.size > MAX_BYTES) {
-        Alert.alert('File Too Large', 'Please choose a file smaller than 10 MB.');
+      if (a.size && a.size > MAX_BYTES && (a.mimeType ?? '').includes('pdf')) {
+        Alert.alert('File Too Large', 'Please choose a PDF smaller than 600 KB, or send a photo of the document instead.');
         return;
       }
       setFile({ uri: a.uri, name: a.name ?? 'document', mimeType: a.mimeType ?? '', size: a.size });
@@ -131,8 +132,7 @@ export default function AdminIssuedDocumentsScreen() {
     );
   };
 
-  const openFile = (url: string) =>
-    Linking.openURL(url).catch(() => Alert.alert('Cannot Open', 'No app on this phone can open this file.'));
+  const openFile = (url: string, name?: string) => openStoredFile(url, name);
 
   const renderItem = ({ item: g }: { item: DocGroup }) => {
     const d = g.doc;
@@ -161,7 +161,7 @@ export default function AdminIssuedDocumentsScreen() {
           Issued {d.issuedOn}{d.expiryDate ? ` · Expires ${d.expiryDate}` : ''}
         </Text>
         <View style={styles.actions}>
-          <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }]} onPress={() => openFile(d.fileUrl)}>
+          <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }]} onPress={() => openFile(d.fileUrl, d.title)}>
             <Text style={[typography.caption, styles.btnText]}>View</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.btn, styles.btnOutline]} onPress={() => confirmDelete(g)}>
@@ -301,7 +301,7 @@ export default function AdminIssuedDocumentsScreen() {
                   />
                 )}
 
-                {label('File (PDF or image, up to 10 MB)')}
+                {label('File (PDF up to 600 KB, or any photo)')}
                 <TouchableOpacity style={styles.fileBtn} onPress={pickFile} activeOpacity={0.8}>
                   <Ionicons name="attach-outline" size={20} color={colors.primary} />
                   <Text style={[typography.body, { color: file ? colors.text : colors.primary, marginLeft: spacing.xs, flex: 1 }]} numberOfLines={1}>

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { Alert, AppState } from 'react-native';
+import { isTodayRevenueGuest } from '../utils/dayRevenue';
 import { getAuth } from '@react-native-firebase/auth';
 import {
   getFirestore, collection, doc, onSnapshot, query, where, setDoc, updateDoc, writeBatch, getDocs,
@@ -1107,14 +1108,11 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   };
 
   const clearDayRevenue = async () => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = start.getTime() + 24 * 60 * 60 * 1000;
-    const todays = guestsQ.data.filter(
-      (g) => !g.dayRevenueCleared && (g.checkInTimestamp ?? 0) >= start.getTime() && (g.checkInTimestamp ?? 0) < end
-    );
+    // Hides everything received so far today. Payments received later still show.
+    const now = Date.now();
+    const todays = guestsQ.data.filter((g) => isTodayRevenueGuest(g));
     const ops: ((b: any) => void)[] = todays.map((g) => (b: any) =>
-      b.update(doc(db, 'dailyGuests', g.id), { dayRevenueCleared: true })
+      b.update(doc(db, 'dailyGuests', g.id), { dayRevenueCleared: true, dayRevenueClearedAt: now })
     );
     if (ops.length === 0) return { ok: true, count: 0 };
     try {
@@ -1127,9 +1125,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   };
 
   const restoreDayRevenue = async () => {
-    const hidden = guestsQ.data.filter((g) => g.dayRevenueCleared);
+    const hidden = guestsQ.data.filter((g) => g.dayRevenueCleared || (g.dayRevenueClearedAt ?? 0) > 0);
     const ops: ((b: any) => void)[] = hidden.map((g) => (b: any) =>
-      b.update(doc(db, 'dailyGuests', g.id), { dayRevenueCleared: false })
+      b.update(doc(db, 'dailyGuests', g.id), { dayRevenueCleared: false, dayRevenueClearedAt: 0 })
     );
     if (ops.length === 0) return { ok: true, count: 0 };
     try {

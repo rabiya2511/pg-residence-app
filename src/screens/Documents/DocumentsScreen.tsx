@@ -15,8 +15,9 @@ import { useRent } from '../../context/RentContext';
 import { useResident } from '../../context/ResidentContext';
 import { useMyIssuedDocuments, docStatus, IssuedDocument } from '../../hooks/useIssuedDocuments';
 import DocumentCard from '../../components/documents/DocumentCard';
+import { openStoredFile } from '../../utils/openStoredFile';
 
-const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_BYTES = 650 * 1024; // PDFs only; photos are shrunk automatically
 
 const STATUS_COLOR = {
   ok: { bg: colors.successBg, fg: colors.success },
@@ -25,8 +26,7 @@ const STATUS_COLOR = {
 };
 const formatINR = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
-const openUrl = (url: string) =>
-  Linking.openURL(url).catch(() => Alert.alert('Cannot Open', 'No app on this phone can open this file.'));
+const openUrl = (url: string, name?: string) => openStoredFile(url, name);
 
 function IssuedCard({ item }: { item: IssuedDocument }) {
   const st = docStatus(item.expiryTs);
@@ -50,7 +50,7 @@ function IssuedCard({ item }: { item: IssuedDocument }) {
       <Text style={[typography.caption, { color: colors.textMuted, marginTop: spacing.xs }]}>
         Issued {item.issuedOn}{item.expiryDate ? ` · Expires ${item.expiryDate}` : ''}
       </Text>
-      <TouchableOpacity style={styles.viewBtn} activeOpacity={0.85} onPress={() => openUrl(item.fileUrl)}>
+      <TouchableOpacity style={styles.viewBtn} activeOpacity={0.85} onPress={() => openUrl(item.fileUrl, item.title)}>
         <Ionicons name="open-outline" size={16} color={colors.white} />
         <Text style={[typography.caption, { color: colors.white, fontWeight: '700', marginLeft: 6 }]}>View / Download</Text>
       </TouchableOpacity>
@@ -114,8 +114,8 @@ export default function DocumentsScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       const a = result.assets[0];
-      if (a.size && a.size > MAX_BYTES) {
-        Alert.alert('File Too Large', 'Please choose a file smaller than 10 MB.');
+      if (a.size && a.size > MAX_BYTES && (a.mimeType ?? '').includes('pdf')) {
+        Alert.alert('File Too Large', 'Please choose a PDF smaller than 600 KB, or upload a photo of the document instead.');
         return;
       }
       runUpload(id, a.uri, a.mimeType ?? undefined);
@@ -215,11 +215,11 @@ export default function DocumentsScreen() {
                         {uploaded ? 'Replace' : 'Upload'}
                       </Text>
                     </TouchableOpacity>
-                    {uploaded && !!item.fileUri && /^https?:/.test(item.fileUri) && (
+                    {uploaded && !!item.fileUri && /^(https?:|data:)/.test(item.fileUri) && (
                       <TouchableOpacity
                         style={[styles.uploadBtn, styles.uploadBtnOutline]}
                         activeOpacity={0.85}
-                        onPress={() => openUrl(item.fileUri)}
+                        onPress={() => openUrl(item.fileUri, item.name)}
                       >
                         <Ionicons name="eye-outline" size={16} color={colors.primary} />
                         <Text style={[typography.caption, { color: colors.primary, fontWeight: '700', marginLeft: 6 }]}>View</Text>

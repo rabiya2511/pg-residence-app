@@ -62,6 +62,24 @@ const toNum = (s: string) => {
   const n = parseFloat(String(s).replace(/[^0-9.]/g, ''));
   return isNaN(n) ? 0 : n;
 };
+// Government ID number rules: Aadhaar is exactly 12 digits; every other ID is letters/digits, up to 16.
+const AADHAAR = 'Aadhar Card';
+
+function cleanDocNumber(type: string, text: string): string {
+  if (type === AADHAAR) return text.replace(/\D/g, '').slice(0, 12);
+  return text.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 16);
+}
+
+function docNumberHint(type: string, v: string): { text: string; invalid: boolean } {
+  if (type === AADHAAR) {
+    if (v.length === 0) return { text: '12-digit Aadhaar number', invalid: false };
+    if (v.length < 12) return { text: `${v.length}/12 digits`, invalid: true };
+    if (v.length === 12) return { text: '12/12 digits', invalid: false };
+    return { text: 'Aadhaar must be exactly 12 digits', invalid: true }; // an older, longer saved value
+  }
+  return { text: `${v.length}/16 characters`, invalid: false };
+}
+
 const formatINR = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
 // ---- image helpers: files via DocumentPicker (the system photo picker crashes on some emulators) ----
@@ -326,6 +344,9 @@ const [notes, setNotes] = useState(existing?.notes ?? '');
   const selectedProperty = properties.find((p) => p.id === propertyId);
   const selectedRoom = rooms.find((r) => r.id === roomId);
 
+
+  const docHint = docNumberHint(idDocType, idDocNumber);
+
   const floorsForProperty = propertyId
     ? Array.from(new Set(rooms.filter((r) => r.propertyId === propertyId).map((r) => r.floor))).sort((a, b) => a - b)
     : [];
@@ -418,7 +439,12 @@ const handleSave = () => {
     return;
   }
 
-
+      // Aadhaar must be exactly 12 digits (other IDs are limited to 16 letters/digits by the field itself).
+    if (idDocType === AADHAAR && idDocNumber && !/^\d{12}$/.test(idDocNumber)) {
+      Alert.alert('Invalid Aadhaar Number', 'The Aadhaar number must be exactly 12 digits.');
+      return;
+    }
+    
     // Government ID is required for a NEW resident (editing never forces re-uploads).
     if (!isEdit) {
       if (!idDocNumber.trim()) {
@@ -680,15 +706,22 @@ const handleSave = () => {
                 valueLabel={idDocType}
                 placeholder="Select"
                 options={GOV_ID_TYPES.map((t) => ({ id: t, label: t }))}
-                onSelect={setIdDocType}
+                onSelect={(t) => {
+                  setIdDocType(t);
+                  setIdDocNumber((prev) => cleanDocNumber(t, prev));
+                }}
                 containerStyle={styles.colField}
               />
               <Field
                 label="Document ID Number"
                 value={idDocNumber}
-                onChangeText={setIdDocNumber}
-                placeholder="Enter number"
+                onChangeText={(t) => setIdDocNumber(cleanDocNumber(idDocType, t))}
+                placeholder={idDocType === AADHAAR ? '12-digit number' : 'Enter number'}
+                keyboardType={idDocType === AADHAAR ? 'numeric' : 'default'}
                 autoCapitalize="characters"
+                maxLength={idDocType === AADHAAR ? 12 : 16}
+                helper={docHint.text}
+                invalid={docHint.invalid}
                 containerStyle={styles.colField}
               />
             </View>
@@ -1140,6 +1173,8 @@ function Field({
   containerStyle,
   autoCapitalize,
   maxLength,
+  helper,
+  invalid,
 }: {
   label: string;
   value: string;
@@ -1149,12 +1184,14 @@ function Field({
   containerStyle?: any;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   maxLength?: number;
+  helper?: string;
+  invalid?: boolean;
 }) {
   return (
     <View style={[styles.field, containerStyle]}>
       <Text style={[typography.caption, styles.label]}>{label}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, invalid && { borderColor: colors.error }]}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -1163,6 +1200,11 @@ function Field({
         autoCapitalize={autoCapitalize ?? (keyboardType === 'email-address' ? 'none' : 'sentences')}
         maxLength={maxLength}
       />
+      {!!helper && (
+        <Text style={[typography.caption, { color: invalid ? colors.error : colors.textMuted, marginTop: 4 }]}>
+          {helper}
+        </Text>
+      )}
     </View>
   );
 }

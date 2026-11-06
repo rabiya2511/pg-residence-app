@@ -18,8 +18,6 @@ import { useAdminSupport } from '../../hooks/useAdminSupport';
 import { useAdminLaundry } from '../../hooks/useLaundry';
 import { useAdminFeedback } from '../../hooks/useFeedback';
 import { useUpiSettings } from '../../hooks/useUpiPayments';
-import ChartCard from '../../components/charts/ChartCard';
-import { collectionRows, collectedByMonthChart } from '../../utils/reportCharts';
 
 // Name of the Room & Bed Management screen in your navigator.
 const ROOMS_ROUTE = 'AdminRooms';
@@ -388,12 +386,6 @@ export default function AdminDashboardScreen() {
             <Text style={[typography.caption, styles.cardLink]}>Collections →</Text>
           </TouchableOpacity>
         </View>
-
-        {/* ---------------- Collection trend ---------------- */}
-        <ChartCard
-          spec={collectedByMonthChart(collectionRows(paymentRecords, 6))}
-          onPress={() => navigation.navigate('AdminRevenue')}
-        />
 
         {/* ---------------- Rooms & Availability ---------------- */}
         <View style={[styles.sectionHeaderRow, { marginTop: spacing.lg }]}>
